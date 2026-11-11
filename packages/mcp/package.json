@@ -1,0 +1,23 @@
+{
+  "name": "@vertskim/mcp",
+  "version": "0.1.0",
+  "description": "Vertskim MCP adapter: tools, output formatting and token budgets",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@vertskim/core": "0.1.0",
+    "zod": "^4.6.7"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "vertskim",
+  "version": "0.1.0",
+  "description": "Local MCP server that maps a project as a queryable knowledge graph",
+  "type": "module",
+  "bin": {
+    "vertskim": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*"
+  ],
+  "dependencies": {
+    "@vertskim/core": "0.1.0",
+    "@vertskim/mcp": "0.1.0",
+    "@vertskim/server": "0.1.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vertskim-ui",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["packages/cli/dist/index.js", "--root", ".", "ui", "--no-open", "--port", "4517"],
+      "port": 4517
+    }
+  ]
+}

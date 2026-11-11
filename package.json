@@ -1,0 +1,21 @@
+{
+  "name": "vertskim-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -b && npm run typecheck -w @vertskim/ui && npm run build -w @vertskim/ui",
+    "clean": "node scripts/clean.mjs",
+    "test": "npm run build && node --test \"packages/*/dist/**/*.test.js\"",
+    "vertskim": "node packages/cli/dist/index.js"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}

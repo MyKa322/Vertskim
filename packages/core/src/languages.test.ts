@@ -1,0 +1,206 @@
+import assert from "node:assert/strict";
+import { readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { after, before, describe, test } from "node:test";
+import { classifyFile } from "./discovery/classify.js";
+import { Project } from "./project.js";
+import { copyFixture, edge, removeTempDirs, tempDir, write } from "./testing/helpers.js";
+
+after(removeTempDirs);
+
+/**
+ * The polyglot fixture holds one small project per language. Each test names
+ * the relationships that only come out right if that language's scoping rules
+ * are followed.
+ */
+describe("Go, Rust, Java and C#", () => {
+  let root: string;
+  let project: Project;
+  const node = (id: string) => project.node(id);
+  const link = (src: string, kind: string, dst: string) => edge(project, src, kind, dst);
+  const resolved = (src: string, kind: string, dst: string) =>
+    assert.equal(link(src, kind, dst)?.confidence, "resolved", `${src} --${kind}--> ${dst}`);
+
+  before(async () => {
+    root = copyFixture("polyglot");
+    project = Project.open({ root, dataDir: tempDir("data") });
+    await project.sync();
+  });
+  after(() => project.close());
+
+  test("Go: a package is its directory, and methods live beside their type or apart from it", () => {
+    const cart = "go/internal/cart";
+    assert.equal(node(`${cart}/cart.go#Cart`)?.subkind, "struct");
+    assert.equal(node(`${cart}/item.go#Pricer`)?.kind, "interface");
+    assert.equal(node(`${cart}/item.go#Pricer.Price`)?.parent, `${cart}/item.go#Pricer`);
+    assert.equal(node(`${cart}/total.go#Total`)?.exported, 1);
+    assert.equal(node(`${cart}/total.go#applyTax`)?.exported, 0);
+    assert.equal(node(`${cart}/total.go#Total`)?.doc, "Total is what the whole cart costs, tax included.");
+    assert.equal(node(`${cart}/item.go#TaxRate`)?.signature, "const TaxRate = 20");
+
+    // Same file as its type: listed under it. Another file: listed under that file.
+    assert.equal(node(`${cart}/cart.go#Cart.Add`)?.parent, `${cart}/cart.go#Cart`);
+    assert.equal(node(`${cart}/total.go#Cart.sum`)?.parent, `${cart}/total.go`);
+
+    // No import between files of one package; the parameter's type says whose `sum` this is.
+    resolved(`${cart}/total.go#Total`, "calls", `${cart}/total.go#Cart.sum`);
+    resolved(`${cart}/total.go#Total`, "calls", `${cart}/total.go#applyTax`);
+    resolved(`${cart}/total.go#applyTax`, "references", `${cart}/item.go#TaxRate`);
+    // `c.record()` on the receiver reaches the embedded struct's method.
+    resolved(`${cart}/cart.go#Cart`, "extends", `${cart}/cart.go#Audit`);
+    resolved(`${cart}/cart.go#Cart.Add`, "calls", `${cart}/cart.go#Audit.record`);
+
+    // An import names a package; the module path comes from go.mod.
+    assert.equal(link("go/cmd/shop/main.go", "imports", "go/internal/cart/")?.confidence, "exact");
+    assert.ok(link("go/cmd/shop/main.go", "imports", "ext:go/fmt"));
+    resolved("go/cmd/shop/main.go#main", "calls", `${cart}/cart.go#New`);
+    resolved("go/cmd/shop/main.go#main", "calls", `${cart}/total.go#Total`);
+    resolved("go/cmd/shop/main.go#main", "calls", "go/internal/format/money.go#Money"); // imported under an alias
+    // `c := cart.New()` leaves the type of `c` unwritten: a guess, marked as one.
+    assert.equal(link("go/cmd/shop/main.go#main", "calls", `${cart}/cart.go#Cart.Add`)?.confidence, "heuristic");
+
+    // A test in the same package imports nothing, so its subjects come from what it uses.
+    assert.equal(project.store.getFile(`${cart}/cart_test.go`)?.subkind, "test");
+    assert.ok(link(`${cart}/cart_test.go`, "tests", `${cart}/total.go`));
+    assert.ok(link(`${cart}/cart_test.go`, "tests", `${cart}/cart.go`));
+    assert.equal(project.store.getFile(`${cart}/cart.go`)?.package, "cart");
+  });
+
+  test("Rust: modules follow files, impl blocks give a type its methods", () => {
+    const account = "rust/src/account.rs";
+    assert.equal(node(`${account}#Account`)?.subkind, "struct");
+    assert.equal(node(`${account}#Describe`)?.kind, "interface");
+    assert.equal(node(`${account}#Kind`)?.subkind, "enum");
+    assert.equal(node(`${account}#Account.deposit`)?.parent, `${account}#Account`);
+    assert.equal(node(`${account}#Account.deposit`)?.doc, "Pays `amount` in, up to the limit.");
+    assert.equal(node(`${account}#Account`)?.doc, "A named balance."); // the comment sits above an attribute
+    assert.equal(node(`${account}#Account.audit`)?.exported, 0);
+    assert.equal(node(`${account}#Account.describe`)?.exported, 1); // public through the trait
+
+    resolved(`${account}#Account`, "implements", `${account}#Describe`);
+    resolved(`${account}#Account.deposit`, "calls", `${account}#Account.audit`);
+    resolved(`${account}#Account.deposit`, "references", `${account}#LIMIT`);
+    resolved(`${account}#open`, "calls", `${account}#Account.new`);
+
+    // `mod account;` and `use crate::account::{open, Account}` both lead to the file.
+    assert.ok(link("rust/src/main.rs", "imports", account));
+    assert.ok(link("rust/src/main.rs", "imports", "rust/src/report/mod.rs"));
+    assert.ok(link("rust/src/report/mod.rs", "imports", "rust/src/report/format.rs"));
+    assert.ok(link(account, "imports", "ext:cargo/serde"));
+    assert.ok(link(account, "imports", "ext:rust/std"));
+    resolved("rust/src/main.rs#main", "calls", `${account}#open`);
+    resolved("rust/src/main.rs#main", "calls", `${account}#Account.deposit`); // `let mut account: Account`
+    resolved("rust/src/report/mod.rs#summary", "calls", `${account}#Account.describe`); // `account: &Account`
+    resolved("rust/src/report/mod.rs#summary", "calls", "rust/src/report/format.rs#line"); // `format::line`
+    // `use super::line` inside an inline `mod tests` means this file.
+    resolved("rust/src/report/format.rs#wraps", "references", "rust/src/report/format.rs#line");
+  });
+
+  test("Java: the package is in scope, declared types settle calls, super and this work", () => {
+    const billing = "java/src/main/java/com/acme/billing";
+    const money = "java/src/main/java/com/acme/util/Money.java";
+    assert.equal(node(`${billing}/Invoice.java#Invoice`)?.signature, "public class Invoice implements Payable");
+    assert.equal(node(`${billing}/Invoice.java#Invoice.total`)?.signature, "public Money total()"); // no @Override
+    assert.equal(node(`${billing}/Invoice.java#Invoice`)?.doc, "A bill made of lines.");
+    assert.equal(node(`${money}#Money.Money`)?.subkind, "constructor");
+    assert.equal(node(`${money}#Money.Money`)?.exported, 0);
+    assert.equal(node(`${money}#Money.Currency`)?.subkind, "enum");
+    assert.equal(node(`${billing}/RecurringInvoice.java#RecurringInvoice.MONTHS`)?.kind, "variable");
+
+    resolved(`${billing}/Invoice.java#Invoice`, "implements", `${billing}/Payable.java#Payable`);
+    resolved(`${billing}/RecurringInvoice.java#RecurringInvoice`, "extends", `${billing}/Invoice.java#Invoice`);
+    // `Money sum`, `for (Line line : lines)`: the declared type decides, so nothing is a guess.
+    resolved(`${billing}/Invoice.java#Invoice.total`, "calls", `${money}#Money.zero`);
+    resolved(`${billing}/Invoice.java#Invoice.total`, "calls", `${money}#Money.plus`);
+    resolved(`${billing}/Invoice.java#Invoice.total`, "calls", `${billing}/Line.java#Line.amount`);
+    // `lines.add(...)` is on a java.util.List, which is not ours: no edge to Invoice.add.
+    assert.equal(link(`${billing}/Invoice.java#Invoice.add`, "calls", `${billing}/Invoice.java#Invoice.add`), null);
+    resolved(`${billing}/RecurringInvoice.java#RecurringInvoice.yearly`, "calls", `${billing}/Invoice.java#Invoice.total`); // super.total()
+    resolved(`${billing}/RecurringInvoice.java#RecurringInvoice.isEmpty`, "calls", `${billing}/Invoice.java#Invoice.count`); // this.count(), inherited
+
+    assert.ok(link(`${billing}/Invoice.java`, "imports", money));
+    assert.ok(link(`${billing}/Invoice.java`, "imports", "ext:jvm/java.util"));
+    assert.ok(link(`${billing}/RecurringInvoice.java`, "imports", "java/src/main/java/com/acme/util/")); // import com.acme.util.*
+
+    // The test sits in another source tree but the same package.
+    const test_ = "java/src/test/java/com/acme/billing/InvoiceTest.java";
+    assert.equal(project.store.getFile(test_)?.subkind, "test");
+    assert.ok(link(test_, "tests", `${billing}/Invoice.java`));
+    resolved(`${test_}#InvoiceTest.totalsItsLines`, "calls", `${billing}/Invoice.java#Invoice.add`);
+    resolved(`${test_}#InvoiceTest.totalsItsLines`, "calls", `${billing}/Invoice.java#Invoice.count`);
+    assert.ok(link(test_, "imports", "ext:jvm/org.junit"));
+  });
+
+  test("C#: namespaces bring types into scope, bare calls reach the class's own methods", () => {
+    const stock = "csharp/src/Inventory/Stock.cs";
+    const istock = "csharp/src/Inventory/IStock.cs";
+    const prices = "csharp/src/Pricing/PriceList.cs";
+    assert.equal(node(`${stock}#Stock`)?.doc, "What the warehouse currently holds.");
+    assert.equal(node(`${stock}#Stock.Log`)?.exported, 0);
+    assert.equal(node(`${istock}#Item`)?.subkind, "record");
+    assert.equal(node(`${istock}#Shelf`)?.subkind, "enum");
+    assert.equal(node(`${istock}#IStock.Add`)?.exported, 1);
+    assert.equal(node(`${prices}#PriceList.Default`)?.subkind, "const");
+    assert.equal(project.store.getFile(stock)?.package, "Acme.Inventory");
+
+    resolved(`${stock}#Stock`, "implements", `${istock}#IStock`);
+    resolved(`${stock}#Stock.Add`, "calls", `${stock}#Stock.Log`); // bare call
+    resolved(`${stock}#Stock.Value`, "calls", `${prices}#PriceList.For`); // through `using Acme.Pricing`
+    resolved(`${stock}#Stock.Add`, "references", `${istock}#Item`); // same namespace, other file
+    assert.ok(link(stock, "imports", "csharp/src/Pricing/"));
+    assert.ok(link(stock, "imports", "ext:dotnet/System"));
+
+    const tests = "csharp/tests/StockTests.cs";
+    resolved(`${tests}#StockTests.AddsUp`, "calls", `${stock}#Stock.Add`); // var stock = new Stock()
+    resolved(`${tests}#StockTests.AddsUp`, "calls", `${stock}#Stock.Value`);
+    assert.ok(link(tests, "tests", stock));
+    assert.ok(link(tests, "imports", "ext:dotnet/Xunit"));
+  });
+
+  test("languages keep to themselves", () => {
+    // Every call edge joins two symbols of the same language.
+    const rows = project.store.db
+      .prepare(
+        `SELECT a.language AS src, b.language AS dst FROM edges e
+         JOIN nodes a ON a.id = e.src JOIN nodes b ON b.id = e.dst
+         WHERE e.kind = 'calls' AND a.language != b.language`,
+      )
+      .all();
+    assert.deepEqual(rows, []);
+    const found = project.search({ query: "deposit" }).hits.map((h) => h.node.id);
+    assert.ok(found.includes("rust/src/account.rs#Account.deposit"));
+  });
+
+  test("changes are picked up without re-linking everything", async () => {
+    const cart = "go/internal/cart";
+    write(root, `${cart}/discount.go`, "package cart\n\nfunc discount(cents int) int {\n\treturn cents / 10\n}\n", 1);
+    const total = readFileSync(join(root, `${cart}/total.go`), "utf8");
+    write(root, `${cart}/total.go`, total.replace("return applyTax(c.sum())", "return applyTax(c.sum() - discount(c.sum()))"), 1);
+    const added = await project.sync();
+    assert.ok(added.resolvedFiles < 12, `re-linked ${added.resolvedFiles} files`);
+    resolved(`${cart}/total.go#Total`, "calls", `${cart}/discount.go#discount`);
+
+    rmSync(join(root, `${cart}/discount.go`));
+    await project.sync();
+    assert.equal(link(`${cart}/total.go#Total`, "calls", `${cart}/discount.go#discount`), null);
+    resolved(`${cart}/total.go#Total`, "calls", `${cart}/total.go#applyTax`);
+
+    // Renaming the module in go.mod changes what every import means.
+    write(root, "go/go.mod", "module example.com/other\n\ngo 1.22\n", 2);
+    await project.sync();
+    assert.equal(link("go/cmd/shop/main.go", "imports", "go/internal/cart/"), null);
+    assert.ok(link("go/cmd/shop/main.go", "imports", "ext:go/example.com/shop/internal"));
+  });
+});
+
+describe("test files are recognised by each language's convention", () => {
+  test("by name and by folder", () => {
+    assert.equal(classifyFile("src/main/java/com/acme/InvoiceTest.java"), "test");
+    assert.equal(classifyFile("src/main/java/com/acme/Contest.java"), "source");
+    assert.equal(classifyFile("src/Billing/StockTests.cs"), "test");
+    assert.equal(classifyFile("internal/cart/cart_test.go"), "test");
+    assert.equal(classifyFile("src/parser_test.rs"), "test");
+    assert.equal(classifyFile("tests/integration.rs"), "test");
+    assert.equal(classifyFile("src/account.rs"), "source");
+  });
+});

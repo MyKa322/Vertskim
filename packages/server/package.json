@@ -1,0 +1,22 @@
+{
+  "name": "@vertskim/server",
+  "version": "0.1.0",
+  "description": "Vertskim local HTTP server: graph API, live events and the visualizer's static files",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*"
+  ],
+  "dependencies": {
+    "@vertskim/core": "0.1.0",
+    "@vertskim/ui": "0.1.0"
+  }
+}

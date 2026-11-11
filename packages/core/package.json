@@ -1,0 +1,26 @@
+{
+  "name": "@vertskim/core",
+  "version": "0.1.0",
+  "description": "Vertskim indexing engine and graph store",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "!dist/testing"
+  ],
+  "dependencies": {
+    "@vscode/tree-sitter-wasm": "^0.3.1",
+    "ignore": "^7.0.14"
+  },
+  "optionalDependencies": {
+    "@parcel/watcher": "^2.6.0"
+  }
+}
