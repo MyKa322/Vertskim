@@ -1,4 +1,13 @@
-import type { GraphView, NodePayload, NotesPayload, SearchPayload, ServerStatus, SourcePayload, TrailEvent } from "./types";
+import type {
+  GraphView,
+  NodePayload,
+  NotesPayload,
+  SearchPayload,
+  ServerStatus,
+  SourcePayload,
+  TrailEvent,
+  TreePayload,
+} from "./types";
 
 const TOKEN_KEY = "vertskim-token";
 
@@ -83,8 +92,13 @@ export class Api {
     return this.request(`/api/source?id=${encodeURIComponent(id)}`);
   }
 
-  search(query: string): Promise<SearchPayload> {
-    return this.request(`/api/search?q=${encodeURIComponent(query)}&limit=12`);
+  search(query: string, limit = 12): Promise<SearchPayload> {
+    return this.request(`/api/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+  }
+
+  /** Every file of the project, for the explorer. */
+  tree(): Promise<TreePayload> {
+    return this.request("/api/tree");
   }
 
   reveal(id: string): Promise<{ id: string; expand: string[] }> {
@@ -114,7 +128,7 @@ export class Api {
   /** Subscribe to live updates. The browser reconnects on its own; returns a function that stops it. */
   events(handlers: EventHandlers): () => void {
     const source = new EventSource(`/api/events?t=${encodeURIComponent(this.token)}`);
-    const parse = <T,>(event: MessageEvent): T => JSON.parse(event.data as string) as T;
+    const parse = <T>(event: MessageEvent): T => JSON.parse(event.data as string) as T;
     source.addEventListener("hello", (e) => {
       const data = parse<{ status: ServerStatus; trail: TrailEvent[] }>(e);
       handlers.onConnection(true);

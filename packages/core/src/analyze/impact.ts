@@ -129,7 +129,10 @@ export function impact(store: GraphStore, targets: GraphNode[], options: ImpactO
     for (const file of files) {
       if (!file.isTest) continue;
       listed.add(file.path);
-      tests.push({ path: file.path, reason: file.distance === 1 ? "uses it directly" : `reaches it in ${file.distance} hops` });
+      tests.push({
+        path: file.path,
+        reason: file.distance === 1 ? "uses it directly" : `reaches it in ${file.distance} hops`,
+      });
     }
     const targetFiles = new Set<string>();
     for (const target of targets) {

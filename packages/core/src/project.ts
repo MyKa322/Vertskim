@@ -16,8 +16,8 @@ import { neighbors, type NeighborOptions, type NeighborResult } from "./query/ne
 import { closeInMeaning, mergeByMeaning, search, type SearchOptions, type SearchResult } from "./query/search.js";
 import { ScipIndexes, type ScipSourceStatus } from "./scip/indexes.js";
 import { GraphStore, SCHEMA_VERSION } from "./store/store.js";
-import type { GraphNode, IndexStatus, SyncResult } from "./types.js";
-import { sha1, toPosix } from "./util.js";
+import type { GraphNode, IndexStatus, SyncResult, SyntaxErrorFile } from "./types.js";
+import { decodeText, sha1, stripControl, toPosix } from "./util.js";
 import { withFileLock } from "./watch/lock.js";
 import { watchProject, type WatchHandle } from "./watch/watcher.js";
 
@@ -54,6 +54,8 @@ export interface ProjectStatus extends IndexStatus {
   error: string | null;
   /** True when file changes are picked up as they happen. */
   watching: boolean;
+  /** Files that do not parse cleanly. */
+  syntaxErrors: SyntaxErrorFile[];
 }
 
 /** Without a watcher: shortest gap between two automatic re-scans of the project tree. */
@@ -65,6 +67,8 @@ const MAX_TARGETED_PATHS = 2000;
 /** While watching, how often a full scan double-checks that no event was missed. */
 const FULL_RESCAN_INTERVAL_MS = 10 * 60_000;
 
+/** A one-off search embeds up to this many changed nodes first; more than that waits for `vertskim embed`. */
+const MAX_EMBED_BEFORE_SEARCH = 100;
 /** At most this many starting points for a task come from what it means rather than the names in it. */
 const MAX_MEANING_SEEDS = 6;
 
@@ -299,8 +303,51 @@ export class Project {
         this.waitingForLock = false;
       }
     }
+    if (total.added + total.changed + total.removed > 0) this.reattachNotes();
     if (total.added + total.changed + total.removed > 0 || !this.embeddedOnce) this.kickEmbedding();
     return total;
+  }
+
+  /**
+   * Notes whose node is gone follow the code when it can be found elsewhere: the same code
+   * (a moved file or symbol), or the same name in exactly one other place.
+   */
+  private reattachNotes(): void {
+    let notes: Note[];
+    try {
+      notes = this.noteStore.all(10_000).filter((note) => !this.store.hasNode(note.nodeId));
+    } catch {
+      return; // no notes file yet
+    }
+    for (const note of notes) {
+      const target = this.movedNode(note);
+      if (!target) continue;
+      try {
+        this.noteStore.move(note.id, target.id);
+        this.log(`note #${note.id} moved from ${note.nodeId} to ${target.id}`);
+      } catch (err) {
+        this.log(`note #${note.id} could not be moved: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  private movedNode(note: Note): GraphNode | null {
+    const hash = note.nodeId.indexOf("#");
+    if (hash < 0) {
+      // A file: one with the same content, anywhere.
+      if (!note.anchor) return null;
+      const rows = this.store.db.prepare("SELECT path FROM files WHERE hash = ?").all(note.anchor);
+      return rows.length === 1 ? this.store.getNode(rows[0]!.path as string) : null;
+    }
+    const qname = note.nodeId.slice(hash + 1);
+    const name = qname.slice(qname.lastIndexOf(".") + 1);
+    const candidates = this.store.nodesNamed(name).filter((n) => n.kind !== "file" && n.kind !== "directory");
+    if (note.anchor) {
+      const same = candidates.filter((n) => this.fingerprint(n) === note.anchor);
+      if (same.length === 1) return same[0]!;
+    }
+    const sameName = candidates.filter((n) => n.id.slice(n.id.indexOf("#") + 1) === qname);
+    return sameName.length === 1 ? sameName[0]! : null;
   }
 
   /** Bring vectors up to date in the background, if this process is the kind that does. */
@@ -311,6 +358,7 @@ export class Project {
       return;
     }
     this.embeddedOnce = true;
+    this.embeddings.warmUp();
     this.embedding = this.embeddings
       .update()
       .then(
@@ -407,10 +455,17 @@ export class Project {
       truncated: this.indexer.truncated,
       error: this.lastError,
       watching: this.watcher !== null,
+      syntaxErrors: this.store.syntaxErrors(),
     };
   }
 
   // ------------------------------------------------------------- queries
+
+  /** The syntax error in a file, if it has one. */
+  syntaxError(path: string): SyntaxErrorFile | null {
+    const file = this.store.getFile(path);
+    return file?.syntaxError ? { path, line: file.syntaxError, keptSymbols: file.keptSymbols === true } : null;
+  }
 
   search(options: SearchOptions): SearchResult {
     return search(this.store, options);
@@ -505,6 +560,15 @@ export class Project {
     return this.embeddings.disable();
   }
 
+  /**
+   * A process that does not keep vectors current in the background (a one-off command)
+   * brings the few that changed up to date before searching by meaning.
+   */
+  private async freshVectors(): Promise<void> {
+    if (this.autoEmbed || this.embeddings.coolingOff()) return;
+    await this.embeddings.update(undefined, MAX_EMBED_BEFORE_SEARCH).catch(() => undefined);
+  }
+
   /** Make vectors for whatever lacks one, after bringing the graph up to date. Does nothing when no model is chosen. */
   async embed(onProgress?: (progress: EmbedProgress) => void): Promise<EmbedResult> {
     await this.sync();
@@ -520,6 +584,7 @@ export class Project {
     const limit = Math.min(Math.max(options.limit ?? 10, 1), 50);
     const words = options.query.trim().split(/\s+/).filter(Boolean);
     if (words.length === 0 || !this.embeddings.ready()) return this.search(options);
+    await this.freshVectors();
     const byName = this.search({ ...options, limit: Math.min(limit * 2, 50) });
     if (words.length < 2 && byName.hits.length > 0) {
       return { hits: byName.hits.slice(0, limit), partial: byName.partial };
@@ -532,6 +597,7 @@ export class Project {
   /** As {@link context}, with starting points also chosen by what the task means when embeddings are on. */
   async contextWithMeaning(options: ContextOptions): Promise<ContextResult> {
     if (!options.task || !this.embeddings.ready()) return this.context(options);
+    await this.freshVectors();
     const candidates = await this.embeddings.search(options.task, MAX_MEANING_SEEDS * 3);
     const close = closeInMeaning(candidates ?? []).slice(0, MAX_MEANING_SEEDS);
     const top = close[0]?.lift ?? 0;
@@ -573,7 +639,7 @@ export class Project {
   addNote(id: string, text: string, author: string | null = null): NoteView {
     const node = this.node(id);
     if (!node) throw new Error(`${id}: no such node`);
-    const clean = text.replace(/\r\n?/g, "\n").trim();
+    const clean = stripControl(text.replace(/\r\n?/g, "\n")).trim();
     if (clean === "") throw new Error("the note is empty");
     if (clean.length > MAX_NOTE_LENGTH) {
       throw new Error(`the note is ${clean.length} characters; the limit is ${MAX_NOTE_LENGTH}`);
@@ -693,7 +759,7 @@ export class Project {
     if (rel.startsWith("..") || isAbsolute(rel)) return null;
     let text: string;
     try {
-      text = readFileSync(abs, "utf8");
+      text = decodeText(readFileSync(abs));
     } catch {
       return null;
     }

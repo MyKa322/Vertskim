@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { Project } from "../project.js";
 import { copyFixture, removeTempDirs, snapshot, tempDir, write } from "../testing/helpers.js";
-import { MAX_NOTE_LENGTH } from "./notes.js";
+import { MAX_NOTE_LENGTH, NOTES_VERSION } from "./notes.js";
 
 after(removeTempDirs);
 
@@ -60,7 +60,10 @@ describe("notes", () => {
   });
 
   test("can be found by their words", () => {
-    assert.deepEqual(project.searchNotes("idempotent retries").map((n) => n.nodeId), [ROTATE]);
+    assert.deepEqual(
+      project.searchNotes("idempotent retries").map((n) => n.nodeId),
+      [ROTATE],
+    );
     assert.deepEqual(project.searchNotes("opaque"), project.searchNotes("OPAQUE"));
     assert.deepEqual(project.searchNotes("100%"), []); // a wildcard character is only a character
   });
@@ -82,7 +85,11 @@ describe("notes", () => {
     assert.equal(project.noteCounts().notes, 4);
     rmSync(join(root, "src/auth/tokens.ts"));
     await project.sync();
-    const gone = project.listNotes().filter((n) => n.orphaned).map((n) => n.nodeId).sort();
+    const gone = project
+      .listNotes()
+      .filter((n) => n.orphaned)
+      .map((n) => n.nodeId)
+      .sort();
     assert.deepEqual(gone, ["src/auth/tokens.ts", ISSUE, ROTATE].sort());
     assert.equal(project.listNotes().find((n) => n.nodeId === "src/auth/")?.orphaned, false);
   });
@@ -98,5 +105,73 @@ describe("notes", () => {
     assert.equal(other.removeNote(added.id), null);
     assert.equal(project.noteCounts().notes, 4);
     await other.close();
+  });
+});
+
+describe("notes that outlive their code", () => {
+  test("follow a file or symbol that moves, and stay behind when the code is gone", async () => {
+    const root = copyFixture();
+    const project = Project.open({ root, dataDir: tempDir("data") });
+    try {
+      await project.sync();
+      const onFile = project.addNote("src/auth/tokens.ts", "Token helpers; keep them free of I/O.", "test");
+      const onSymbol = project.addNote("src/auth/session.ts#SessionStore.refresh", "Must stay idempotent.", "test");
+      const onGone = project.addNote("src/utils/log.ts#info", "Only for the command line.", "test");
+
+      // tokens.ts is renamed as it is; refresh moves, unchanged, into a new file; info is deleted.
+      const tokens = readFileSync(join(root, "src/auth/tokens.ts"), "utf8");
+      rmSync(join(root, "src/auth/tokens.ts"));
+      write(root, "src/auth/token-utils.ts", tokens, 1);
+      const session = readFileSync(join(root, "src/auth/session.ts"), "utf8");
+      const start = session.indexOf("  /**\n   * Rotates");
+      const end = session.indexOf("  private async persist");
+      write(root, "src/auth/session.ts", session.slice(0, start) + session.slice(end), 2);
+      write(root, "src/auth/refresh.ts", `export class SessionStore {\n${session.slice(start, end)}}\n`, 3);
+      write(
+        root,
+        "src/utils/log.ts",
+        readFileSync(join(root, "src/utils/log.ts"), "utf8").replace(/export function info[\s\S]*$/, ""),
+        4,
+      );
+      await project.sync();
+
+      const byId = new Map(project.listNotes().map((n) => [n.id, n]));
+      assert.equal(byId.get(onFile.id)?.nodeId, "src/auth/token-utils.ts");
+      assert.equal(byId.get(onFile.id)?.orphaned, false);
+      assert.equal(byId.get(onFile.id)?.stale, false);
+      assert.equal(byId.get(onSymbol.id)?.nodeId, "src/auth/refresh.ts#SessionStore.refresh");
+      assert.equal(byId.get(onSymbol.id)?.stale, false);
+      assert.equal(byId.get(onGone.id)?.nodeId, "src/utils/log.ts#info");
+      assert.equal(byId.get(onGone.id)?.orphaned, true);
+    } finally {
+      await project.close();
+    }
+  });
+
+  test("a notes file written by a newer version is shown but not changed", async () => {
+    const root = copyFixture();
+    const dataDir = tempDir("data");
+    const project = Project.open({ root, dataDir });
+    await project.sync();
+    project.addNote("src/auth/tokens.ts#rotate", "Written by this version.", "test");
+    await project.close();
+
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(join(dataDir, "notes.db"));
+    assert.equal((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, NOTES_VERSION);
+    db.exec(`PRAGMA user_version = ${NOTES_VERSION + 1}`);
+    db.close();
+
+    const reopened = Project.open({ root, dataDir });
+    try {
+      await reopened.sync();
+      assert.equal(reopened.listNotes()[0]?.text, "Written by this version.");
+      assert.throws(
+        () => reopened.addNote("src/auth/tokens.ts#rotate", "Another one.", "test"),
+        /newer version of Vertskim/,
+      );
+    } finally {
+      await reopened.close();
+    }
   });
 });

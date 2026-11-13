@@ -18,6 +18,6 @@ def load_records(path: str) -> list[Record]:
 
 def build_report(path: str) -> str:
     """Render every record as a bullet list."""
-    lines = [make_bullet(record.describe()) for record in load_records(path)]
+    lines = [make_bullet(f"{record.label()}: {record.describe()}") for record in load_records(path)]
     header = formatting.bullet("usage")
     return "\n".join([header, *lines])

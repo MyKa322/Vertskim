@@ -25,6 +25,16 @@ export interface NoteView extends Note {
 
 export const MAX_NOTE_LENGTH = 1200;
 
+/**
+ * Layout of notes.db. Notes cannot be rebuilt, so a change to the layout is a migration
+ * from each earlier version, never a fresh start. Version 0 is a file made before versions
+ * were recorded, which has the version 1 layout.
+ */
+export const NOTES_VERSION = 1;
+const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {
+  0: () => {},
+};
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS notes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,6 +65,8 @@ function rowToNote(row: Record<string, unknown>): Note {
  */
 export class NoteStore {
   private db: DatabaseSync | null = null;
+  /** Set when the file was written by a newer version, whose layout this one does not know. */
+  private newer = false;
 
   constructor(private readonly path: string) {}
 
@@ -64,9 +76,29 @@ export class NoteStore {
     const db = new DatabaseSync(this.path);
     db.exec("PRAGMA journal_mode = WAL");
     db.exec("PRAGMA busy_timeout = 5000");
-    db.exec(SCHEMA);
+    let version = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
+    if (version > NOTES_VERSION) {
+      this.newer = true;
+    } else {
+      db.exec(SCHEMA);
+      for (; version < NOTES_VERSION; version++) MIGRATIONS[version]!(db);
+      db.exec(`PRAGMA user_version = ${NOTES_VERSION}`);
+    }
     this.db = db;
     return db;
+  }
+
+  /** Notes written by a newer version are shown but not changed, so nothing of them is lost. */
+  private writable(): DatabaseSync {
+    const db = this.open(true)!;
+    if (this.newer)
+      throw new Error("notes.db was written by a newer version of Vertskim; update Vertskim to change notes");
+    return db;
+  }
+
+  /** Attach a note to another node, as when the code it is about has moved. */
+  move(id: number, nodeId: string): void {
+    this.writable().prepare("UPDATE notes SET node_id = ? WHERE id = ?").run(nodeId, id);
   }
 
   close(): void {
@@ -75,7 +107,7 @@ export class NoteStore {
   }
 
   add(nodeId: string, text: string, author: string | null, anchor: string | null): Note {
-    const db = this.open(true)!;
+    const db = this.writable();
     const createdAt = Date.now();
     const result = db
       .prepare("INSERT INTO notes (node_id, text, author, created_at, anchor) VALUES (?, ?, ?, ?, ?)")
@@ -89,8 +121,8 @@ export class NoteStore {
   }
 
   remove(id: number): boolean {
-    const db = this.open(false);
-    return db ? Number(db.prepare("DELETE FROM notes WHERE id = ?").run(id).changes) > 0 : false;
+    if (!this.open(false)) return false;
+    return Number(this.writable().prepare("DELETE FROM notes WHERE id = ?").run(id).changes) > 0;
   }
 
   /** Notes on any of the given nodes, oldest first. */

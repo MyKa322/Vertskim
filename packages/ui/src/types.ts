@@ -54,8 +54,33 @@ export interface SourcePayload {
 
 export interface SearchPayload {
   partial: boolean;
-  hits: { node: GraphNode; fanIn: number }[];
+  /** `byMeaning`: found by what the code does rather than by its name. */
+  hits: { node: GraphNode; fanIn: number; byMeaning?: boolean }[];
 }
 
 export type ColorBy = "kind" | "folder";
 export type ControlType = "orbit" | "fly";
+
+/** One file of the project, as the explorer lists it. Its path is also its node id. */
+export interface TreeFile {
+  path: string;
+  language: string | null;
+  subkind: string;
+  lines: number;
+  /** 1-based line of the first syntax error, if the file does not parse. */
+  syntaxError: number | null;
+}
+
+export interface TreePayload {
+  version: string;
+  files: TreeFile[];
+}
+
+/** The views of the side bar, one per button of the activity bar. */
+export type SideView = "explorer" | "search" | "graph" | "notes" | "activity";
+
+/** A node kept open as a tab. Until pinned, the next node opened takes its place. */
+export interface EditorTab {
+  id: string;
+  pinned: boolean;
+}

@@ -1,0 +1,11 @@
+{
+  "name": "acme/shop",
+  "autoload": {
+    "psr-4": {
+      "Acme\\Shop\\": "src/"
+    }
+  },
+  "require": {
+    "psr/log": "^3.0"
+  }
+}

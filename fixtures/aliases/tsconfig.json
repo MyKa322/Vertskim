@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    /* Aliases resolve against baseUrl, which comes from the base config. */
+    "paths": {
+      "@lib/*": ["lib/*"],
+      "@app": ["src/app/index.ts"],
+    },
+  },
+}

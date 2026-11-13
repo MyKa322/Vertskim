@@ -12,6 +12,10 @@ class Record:
         """Human-readable summary of the row."""
         return f"{self.user_id}: {self.count}"
 
+    def label(self) -> str:
+        """Short name for the row in headings."""
+        return self.user_id.upper()
+
 
 class WeightedRecord(Record):
     """A record whose count is scaled."""

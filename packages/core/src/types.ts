@@ -68,20 +68,19 @@ export interface GraphEdge {
 }
 
 /** Reference kinds produced by extractors before resolution. */
-export type RefKind =
-  | "calls"
-  | "new"
-  | "references"
-  | "type"
-  | "extends"
-  | "implements"
-  | "mentions"
-  | "links_to";
+export type RefKind = "calls" | "new" | "references" | "type" | "extends" | "implements" | "mentions" | "links_to";
 
 /** Stored as a reference's qualifier when the receiver is the enclosing type itself. */
 export const SELF_QUALIFIER = "@self";
-/** Starts a qualifier that names the receiver's declared type instead of the receiver: `:Store`. */
+/**
+ * Starts a qualifier that names the receiver's type instead of the receiver.
+ * `:Store` is a type written down; `:()Project open` is whatever `Project.open()`
+ * returns; a qualifier starting with `?` is an expression of unknown type, followed
+ * by what is known about where it starts: `?z`, `?:Store`.
+ */
 export const TYPED_PREFIX = ":";
+/** A receiver of unknown type, followed by the start of the expression it comes from. */
+export const UNKNOWN_PREFIX = "?";
 
 /** An unresolved reference found in a file. Resolved into edges by the resolver. */
 export interface RawRef {
@@ -121,6 +120,17 @@ export interface Extraction {
   fileDoc?: string | null;
   /** Package or namespace the file declares, in languages that have one. */
   package?: string | null;
+  /** 1-based line of the first syntax error, when the file does not parse cleanly. */
+  syntaxError?: number | null;
+  /** Fields of the file's types whose type is written down or inferred, for following `a.b.c()`. */
+  fields?: FieldHint[];
+}
+
+/** A field of a class, interface or struct, and what is known of its type (encoded as a receiver hint). */
+export interface FieldHint {
+  owner: string;
+  name: string;
+  type: string;
 }
 
 /** One relationship a compiler-backed (SCIP) index states as fact. */
@@ -144,6 +154,18 @@ export interface FileRecord {
   lines: number;
   /** Package or namespace the file declares, in languages that have one. */
   package?: string | null;
+  /** 1-based line of the first syntax error in the file as it is now, if any. */
+  syntaxError?: number | null;
+  /** True when the symbols stored for the file come from an earlier version that parsed. */
+  keptSymbols?: boolean;
+}
+
+/** A file that does not parse cleanly. */
+export interface SyntaxErrorFile {
+  path: string;
+  line: number;
+  /** True when its symbols are those of the last version that parsed, not of the file as it is now. */
+  keptSymbols: boolean;
 }
 
 export interface IndexStatus {

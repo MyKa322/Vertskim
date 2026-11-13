@@ -1,3 +1,5 @@
+// The appearance is settled first, so the page's first paint is already in the right colours.
+import "./theme";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { takeToken } from "./api";

@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 334" width="860" height="334" role="img" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif'>
+<title>Tokens an assistant reads to answer one question</title>
+<desc>Get oriented in the project: 880 tokens with the graph, 14948 without. See what a file contains: 327 tokens with the graph, 1564 without. Read one function or class: 195 tokens with the graph, 3016 without. Find who uses a symbol: 64 tokens with the graph, 215 without. Gather the code around a symbol: 874 tokens with the graph, 5247 without. Check what a change would affect: 188 tokens with the graph, 2820 without.</desc>
+<text x="0" y="20" font-size="16" font-weight="600" fill="#f0f6fc">Tokens an assistant reads to answer one question</text>
+<text x="0" y="40" font-size="12" fill="#9198a1">Medians on this repository (533 files, 1,761 symbols), from vertskim bench on 2026-11-13. Shorter is better.</text>
+<rect x="0" y="57" width="12" height="12" rx="3" fill="#104281"/>
+<text x="18" y="67" font-size="12" fill="#9198a1">Without the graph: reading files and searching text</text>
+<rect x="366.40000000000003" y="57" width="12" height="12" rx="3" fill="#3987e5"/>
+<text x="384.40000000000003" y="67" font-size="12" fill="#9198a1">With Vertskim</text>
+<line x1="0" y1="88" x2="860" y2="88" stroke="#3d444d" stroke-width="1" opacity="0.6"/>
+<text x="0" y="106" font-size="13" fill="#f0f6fc">Get oriented in the project</text>
+<text x="0" y="121" font-size="11" fill="#848d97">graph_overview</text>
+<path d="M252 101h396a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-396z" fill="#104281"/>
+<path d="M252 101h19.54830077602355a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-19.54830077602355z" fill="#3987e5"/>
+<text x="664" y="112.5" font-size="13" fill="#f0f6fc"><tspan font-weight="600">94% less</tspan><tspan dx="8" font-size="12" fill="#9198a1">880 vs 14,948</tspan></text>
+<line x1="0" y1="128" x2="860" y2="128" stroke="#3d444d" stroke-width="1" opacity="0.6"/>
+<text x="0" y="146" font-size="13" fill="#f0f6fc">See what a file contains</text>
+<text x="0" y="161" font-size="11" fill="#848d97">graph_node (outline)</text>
+<path d="M252 141h396a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-396z" fill="#104281"/>
+<path d="M252 141h79.63171355498721a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-79.63171355498721z" fill="#3987e5"/>
+<text x="664" y="152.5" font-size="13" fill="#f0f6fc"><tspan font-weight="600">79% less</tspan><tspan dx="8" font-size="12" fill="#9198a1">327 vs 1,564</tspan></text>
+<line x1="0" y1="168" x2="860" y2="168" stroke="#3d444d" stroke-width="1" opacity="0.6"/>
+<text x="0" y="186" font-size="13" fill="#f0f6fc">Read one function or class</text>
+<text x="0" y="201" font-size="11" fill="#848d97">graph_node (source)</text>
+<path d="M252 181h396a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-396z" fill="#104281"/>
+<path d="M252 181h21.862068965517242a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-21.862068965517242z" fill="#3987e5"/>
+<text x="664" y="192.5" font-size="13" fill="#f0f6fc"><tspan font-weight="600">94% less</tspan><tspan dx="8" font-size="12" fill="#9198a1">195 vs 3,016</tspan></text>
+<line x1="0" y1="208" x2="860" y2="208" stroke="#3d444d" stroke-width="1" opacity="0.6"/>
+<text x="0" y="226" font-size="13" fill="#f0f6fc">Find who uses a symbol</text>
+<text x="0" y="241" font-size="11" fill="#848d97">graph_neighbors (in)</text>
+<path d="M252 221h396a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-396z" fill="#104281"/>
+<path d="M252 221h115.06976744186046a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-115.06976744186046z" fill="#3987e5"/>
+<text x="664" y="232.5" font-size="13" fill="#f0f6fc"><tspan font-weight="600">70% less</tspan><tspan dx="8" font-size="12" fill="#9198a1">64 vs 215</tspan></text>
+<line x1="0" y1="248" x2="860" y2="248" stroke="#3d444d" stroke-width="1" opacity="0.6"/>
+<text x="0" y="266" font-size="13" fill="#f0f6fc">Gather the code around a symbol</text>
+<text x="0" y="281" font-size="11" fill="#848d97">graph_context (source)</text>
+<path d="M252 261h396a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-396z" fill="#104281"/>
+<path d="M252 261h62.62854964741757a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-62.62854964741757z" fill="#3987e5"/>
+<text x="664" y="272.5" font-size="13" fill="#f0f6fc"><tspan font-weight="600">83% less</tspan><tspan dx="8" font-size="12" fill="#9198a1">874 vs 5,247</tspan></text>
+<line x1="0" y1="288" x2="860" y2="288" stroke="#3d444d" stroke-width="1" opacity="0.6"/>
+<text x="0" y="306" font-size="13" fill="#f0f6fc">Check what a change would affect</text>
+<text x="0" y="321" font-size="11" fill="#848d97">graph_impact</text>
+<path d="M252 301h396a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-396z" fill="#104281"/>
+<path d="M252 301h22.666666666666668a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-22.666666666666668z" fill="#3987e5"/>
+<text x="664" y="312.5" font-size="13" fill="#f0f6fc"><tspan font-weight="600">93% less</tspan><tspan dx="8" font-size="12" fill="#9198a1">188 vs 2,820</tspan></text>
+</svg>

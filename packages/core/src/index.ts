@@ -21,7 +21,17 @@ export {
   type ProviderName,
 } from "./embed/provider.js";
 export type { ContextItem, ContextOptions, ContextResult } from "./analyze/context.js";
+export {
+  measureAnswers,
+  measureEdgeAccuracy,
+  readQuestions,
+  type AnswerQuality,
+  type EdgeAccuracy,
+  type Question,
+  type QuestionResult,
+} from "./analyze/accuracy.js";
 export type { ImpactedNode, ImpactOptions, ImpactResult } from "./analyze/impact.js";
+export { MAX_REACH } from "./analyze/overview.js";
 export type { DirSummary, Overview } from "./analyze/overview.js";
 export type { PathOptions, PathResult, PathStep } from "./analyze/path.js";
 export { EXTERNAL_GROUP } from "./analyze/view.js";
@@ -30,6 +40,7 @@ export type { NodeDetails, OutlineEntry, EdgeGroup } from "./query/details.js";
 export type { Neighbor, NeighborOptions, NeighborResult } from "./query/neighbors.js";
 export type { SearchHit, SearchOptions, SearchResult } from "./query/search.js";
 export { DEFAULT_IGNORES } from "./discovery/walk.js";
+export { stripControl } from "./util.js";
 export { EDGE_KINDS, NODE_KINDS } from "./types.js";
 export type {
   Confidence,
@@ -42,4 +53,5 @@ export type {
   IndexStatus,
   NodeKind,
   SyncResult,
+  SyntaxErrorFile,
 } from "./types.js";

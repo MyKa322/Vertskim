@@ -57,6 +57,8 @@ export interface FakeModelServer {
   requests: number;
   /** The `authorization` header of the last request, if it had one. */
   lastAuthorization: string | null;
+  /** The body of the last embedding request. */
+  lastBody: Record<string, unknown> | null;
   /** Answer every embedding request with this status from now on; 0 for normal service. */
   failWith: number;
   close(): Promise<void>;
@@ -71,20 +73,30 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-export async function startFakeModelServer(models = ["nomic-embed-text:latest", "all-minilm:latest", "llama3.2:latest"]): Promise<FakeModelServer> {
-  const state = { texts: [] as string[], requests: 0, lastAuthorization: null as string | null, failWith: 0 };
+export async function startFakeModelServer(
+  models = ["nomic-embed-text:latest", "all-minilm:latest", "llama3.2:latest"],
+): Promise<FakeModelServer> {
+  const state = {
+    texts: [] as string[],
+    requests: 0,
+    lastAuthorization: null as string | null,
+    lastBody: null as Record<string, unknown> | null,
+    failWith: 0,
+  };
   const server: Server = createServer((req, res) => {
     const send = (status: number, body: unknown) => {
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(body));
     };
     void (async () => {
-      if (req.method === "GET" && req.url === "/api/tags") return send(200, { models: models.map((name) => ({ name })) });
+      if (req.method === "GET" && req.url === "/api/tags")
+        return send(200, { models: models.map((name) => ({ name })) });
       const ollama = req.url === "/api/embed";
       if (req.method !== "POST" || (!ollama && req.url !== "/v1/embeddings")) return send(404, { error: "not found" });
       const body = JSON.parse(await readBody(req)) as { model: string; input: string[] };
       state.requests++;
       state.lastAuthorization = req.headers.authorization ?? null;
+      state.lastBody = body as unknown as Record<string, unknown>;
       if (state.failWith) return send(state.failWith, { error: "the model is not loaded" });
       if (!models.some((name) => name === body.model || name.startsWith(`${body.model}:`))) {
         const message = `model "${body.model}" not found, try pulling it first`;

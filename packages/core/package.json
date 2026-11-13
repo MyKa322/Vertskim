@@ -2,6 +2,15 @@
   "name": "@vertskim/core",
   "version": "0.1.0",
   "description": "Vertskim indexing engine and graph store",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "knowledge-graph",
+    "code-graph",
+    "code-search",
+    "ai-assistant"
+  ],
+  "license": "Apache-2.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -16,6 +25,9 @@
     "!dist/**/*.test.*",
     "!dist/testing"
   ],
+  "engines": {
+    "node": ">=22.16"
+  },
   "dependencies": {
     "@vscode/tree-sitter-wasm": "^0.3.1",
     "ignore": "^7.0.14"

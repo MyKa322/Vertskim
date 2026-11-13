@@ -1,21 +1,29 @@
 {
   "name": "vertskim-workspace",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "workspaces": [
     "packages/*"
   ],
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.16"
   },
   "scripts": {
-    "build": "tsc -b && npm run typecheck -w @vertskim/ui && npm run build -w @vertskim/ui",
+    "build": "tsc -b && npm run typecheck -w @vertskim/ui && npm run build -w @vertskim/ui && node scripts/copy-ui.mjs",
     "clean": "node scripts/clean.mjs",
     "test": "npm run build && node --test \"packages/*/dist/**/*.test.js\"",
-    "vertskim": "node packages/cli/dist/index.js"
+    "test:browser": "npm run build && node --test packages/server/dist/ui.browser.js",
+    "vertskim": "node packages/cli/dist/bin.js",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "media": "node scripts/capture-media.mjs",
+    "charts": "node scripts/make-charts.mjs"
   },
   "devDependencies": {
-    "@types/node": "^26.6.6",
+    "@biomejs/biome": "2.6.7",
+    "@types/node": "22.20.5",
+    "playwright": "1.65.0",
     "typescript": "^7.0.2"
   }
 }

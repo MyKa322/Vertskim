@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import type { GraphNode, Project } from "@vertskim/core";
+import type { AnswerQuality, EdgeAccuracy, GraphNode, Project } from "@vertskim/core";
 import { estimateTokens } from "./format.js";
 import { findTool } from "./registry.js";
 
@@ -178,12 +178,9 @@ export async function runBenchmark(project: Project, options: BenchOptions = {})
   // 1. Getting oriented
   const listing = [...store.allFiles().keys()].sort().slice(0, LISTING_LIMIT).join("\n");
   const readme = [...texts.keys()].find((p) => /^readme(\.\w+)?$/i.test(p));
-  row(
-    "Get oriented in the project",
-    `list the files (first ${LISTING_LIMIT}) and read the README`,
-    "graph_overview",
-    [[estimateTokens(listing) + (readme ? fileTokens(readme) : 0), await run("graph_overview", {})]],
-  );
+  row("Get oriented in the project", `list the files (first ${LISTING_LIMIT}) and read the README`, "graph_overview", [
+    [estimateTokens(listing) + (readme ? fileTokens(readme) : 0), await run("graph_overview", {})],
+  ]);
 
   // 2. What is in a file
   const outlines: [number, number][] = [];
@@ -281,15 +278,78 @@ export function formatBenchmark(result: BenchResult): string {
   }
   lines.push(
     "",
-    "\"difference\" compares the medians; \"overall\" compares the totals over all samples, which large files dominate.",
+    '"difference" compares the medians; "overall" compares the totals over all samples, which large files dominate.',
     "This measures size only. A text search also finds uses the graph cannot see (strings, reflection),",
     "and the graph tells apart relationships a text search cannot; neither column is a complete answer.",
   );
   if (result.capped) {
-    lines.push("The project is larger than the benchmark reads; the baselines cover part of it and are underestimates.");
+    lines.push(
+      "The project is larger than the benchmark reads; the baselines cover part of it and are underestimates.",
+    );
   }
   if (result.rows.some((row) => row.samples === 0)) {
     lines.push("Some questions had nothing to sample: the project has too few symbols that anything depends on.");
+  }
+  return lines.join("\n");
+}
+
+function percent(part: number, whole: number): string {
+  return whole === 0 ? "-" : `${Math.round((100 * part) / whole)}%`;
+}
+
+/** The comparison with a compiler index, as text. */
+export function formatEdgeAccuracy(report: EdgeAccuracy): string {
+  const { guesses, linked, compilerCalls } = report;
+  const lines = [
+    `Compared with ${report.index}${report.tool ? ` (${report.tool})` : ""}, over the ${report.files} files it describes:`,
+    "",
+    `Calls linked by name alone (~):  ${guesses.total}`,
+    `  confirmed by the compiler       ${guesses.confirmed}  (${percent(guesses.confirmed, guesses.total)})`,
+    `  contradicted                    ${guesses.contradicted}  (${percent(guesses.contradicted, guesses.total)})`,
+    `  the compiler has no view        ${guesses.unknown}`,
+    `Calls linked through imports or types:  ${linked.total}, ${percent(linked.confirmed, linked.total)} confirmed`,
+    `Calls the compiler knows of:  ${compilerCalls.total}, ${compilerCalls.found} found from syntax (${percent(compilerCalls.found, compilerCalls.total)})`,
+  ];
+  const missed = Object.entries(report.missedBy).sort((a, b) => b[1] - a[1]);
+  if (missed.length > 0) {
+    lines.push("  missed, by how the call is written:");
+    for (const [shape, count] of missed) lines.push(`    ${shape.padEnd(22)} ${count}`);
+  }
+  if (report.examples.contradicted.length > 0) {
+    lines.push("", "Guesses the compiler contradicts, for example:");
+    for (const example of report.examples.contradicted) lines.push(`  ${example}`);
+  }
+  if (report.examples.unconfirmed.length > 0) {
+    lines.push("", "Calls linked through imports or types that the compiler does not have, for example:");
+    for (const example of report.examples.unconfirmed) lines.push(`  ${example}`);
+  }
+  if (report.examples.missed.length > 0) {
+    lines.push("", "Calls syntax missed, for example:");
+    for (const example of report.examples.missed) lines.push(`  ${example}`);
+  }
+  return lines.join("\n");
+}
+
+/** How a question set fared, as text. */
+export function formatAnswerQuality(quality: AnswerQuality): string {
+  const total = quality.questions.length;
+  const rank = (r: number | null) => (r === null ? "-" : String(r));
+  const lines = [
+    `${total} questions, search by meaning ${quality.meaning ? "on" : "off"}`,
+    `graph_search:  right answer in the first five for ${quality.searchTop5} (${percent(quality.searchTop5, total)}), mean reciprocal rank ${quality.searchMrr.toFixed(2)}`,
+    `graph_context: right answer among the starting points for ${quality.contextSeeds}, in the first ten for ${quality.contextTop10}`,
+    "",
+    "search  context  question",
+  ];
+  for (const q of quality.questions) {
+    const context = q.contextSeed ? "start" : rank(q.contextRank);
+    lines.push(`${rank(q.searchRank).padStart(6)}  ${context.padStart(7)}  ${q.ask}`);
+  }
+  if (quality.unknownIds.length > 0) {
+    lines.push(
+      "",
+      `Expected ids that are not in the graph (update the question set): ${quality.unknownIds.join(", ")}`,
+    );
   }
   return lines.join("\n");
 }

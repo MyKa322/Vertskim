@@ -1,0 +1,7 @@
+{
+  // Settings shared by every package; the aliases build on baseUrl.
+  "compilerOptions": {
+    "baseUrl": ".",
+    "strict": true,
+  },
+}

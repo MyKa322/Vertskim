@@ -46,9 +46,11 @@ const LANGUAGE_BY_EXT: Record<string, string> = {
 };
 
 const DOC_EXTS = new Set([".md", ".mdx", ".markdown", ".rst", ".txt", ".adoc"]);
+// biome-ignore format: a list of words reads better packed
 const CONFIG_EXTS = new Set([
   ".json", ".jsonc", ".json5", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".lock", ".xml", ".properties", ".env",
 ]);
+// biome-ignore format: a list of words reads better packed
 const ASSET_EXTS = new Set([
   ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".svg", ".ico", ".bmp", ".tiff",
   ".woff", ".woff2", ".ttf", ".otf", ".eot",
@@ -56,10 +58,12 @@ const ASSET_EXTS = new Set([
   ".pdf", ".glb", ".gltf", ".fbx", ".obj", ".blend", ".psd",
 ]);
 const DATA_EXTS = new Set([".csv", ".tsv", ".parquet", ".sqlite", ".db", ".ndjson", ".jsonl"]);
+// biome-ignore format: a list of words reads better packed
 const SOURCE_LANGUAGES = new Set([
   "typescript", "tsx", "javascript", "python", "go", "rust", "java", "kotlin", "csharp", "c", "cpp",
   "ruby", "php", "swift", "lua", "shell", "powershell", "sql", "css", "scss", "html", "vue", "svelte",
 ]);
+// biome-ignore format: a list of words reads better packed
 const CONFIG_BASENAMES = new Set([
   "dockerfile", "makefile", ".gitignore", ".gitattributes", ".editorconfig", ".npmrc", ".prettierrc", ".eslintrc",
 ]);
@@ -81,7 +85,9 @@ export function classifyFile(path: string): FileSubkind {
   if (DATA_EXTS.has(ext)) return "data";
   const language = LANGUAGE_BY_EXT[ext];
   if (language && SOURCE_LANGUAGES.has(language)) {
-    return TEST_FILE.test(base) || TEST_CLASS_FILE.test(posixBasename(path)) || TEST_PATH.test(path) ? "test" : "source";
+    return TEST_FILE.test(base) || TEST_CLASS_FILE.test(posixBasename(path)) || TEST_PATH.test(path)
+      ? "test"
+      : "source";
   }
   if (CONFIG_EXTS.has(ext) || CONFIG_BASENAMES.has(base) || base.startsWith(".env")) return "config";
   return "other";

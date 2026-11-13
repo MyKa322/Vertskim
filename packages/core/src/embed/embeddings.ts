@@ -5,7 +5,7 @@ import type { GraphNode } from "../types.js";
 import { sha1 } from "../util.js";
 import { withFileLock } from "../watch/lock.js";
 import { checkConfig, createEmbedder, type Embedder, type EmbeddingConfig } from "./provider.js";
-import { EMBEDDED_KINDS, embeddingText } from "./text.js";
+import { EMBEDDED_KINDS, embeddingText, TEXT_VERSION } from "./text.js";
 import { VectorStore, type VectorRow } from "./vectors.js";
 
 export interface EmbeddingStatus {
@@ -55,6 +55,8 @@ const BATCH_CHARS = 24_000;
 export const MAX_VECTORS = 80_000;
 /** A query waits this long for the model before the search goes ahead without it. */
 const QUERY_TIMEOUT_MS = 6000;
+/** The first query of a process may have to wait for the model to be loaded. */
+const FIRST_QUERY_TIMEOUT_MS = 20_000;
 /** After the model fails to answer a query it is left alone for this long. */
 const COOL_OFF_MS = 30_000;
 const CONFIG_CHECK_MS = 1000;
@@ -76,6 +78,8 @@ export class Embeddings {
   private readonly queries = new Map<string, Float32Array>();
   private wanted = 0;
   private capped = false;
+  private answered = false;
+  private warmed = false;
 
   constructor(
     private readonly store: GraphStore,
@@ -134,7 +138,7 @@ export class Embeddings {
   async configure(raw: unknown): Promise<EmbeddingConfig> {
     const config = checkConfig(raw);
     await createEmbedder(config).embed(["a short test sentence"], "query", { timeoutMs: 60_000 });
-    writeFileSync(this.configPath, `${JSON.stringify(config, null, 2)}\n`);
+    writeFileSync(this.configPath, `${JSON.stringify({ version: 1, ...config }, null, 2)}\n`);
     this.loaded = null;
     this.lastError = null;
     return config;
@@ -187,12 +191,30 @@ export class Embeddings {
    * those whose node is gone. Concurrent callers share one pass; several
    * processes take turns.
    */
-  update(onProgress?: (progress: EmbedProgress) => void): Promise<EmbedResult> {
-    this.running ??= this.runUpdate(onProgress).finally(() => {
+  update(onProgress?: (progress: EmbedProgress) => void, maxNew = Infinity): Promise<EmbedResult> {
+    this.running ??= this.runUpdate(onProgress, maxNew).finally(() => {
       this.running = null;
       this.abort = null;
     });
     return this.running;
+  }
+
+  /** True while the model is being left alone after failing to answer. */
+  coolingOff(): boolean {
+    return Date.now() < this.quietUntil;
+  }
+
+  /** Have the model loaded before the first search needs it. Errors are left for the search to report. */
+  warmUp(): void {
+    const { embedder } = this.load();
+    if (!embedder || this.warmed) return;
+    this.warmed = true;
+    embedder.embed(["warm up"], "query", { timeoutMs: FIRST_QUERY_TIMEOUT_MS }).then(
+      () => {
+        this.answered = true;
+      },
+      () => undefined,
+    );
   }
 
   /** Stop a pass in flight; what it has stored so far is kept. */
@@ -206,15 +228,23 @@ export class Embeddings {
     this.vectors.close();
   }
 
-  private async runUpdate(onProgress?: (progress: EmbedProgress) => void): Promise<EmbedResult> {
+  private async runUpdate(
+    onProgress: ((progress: EmbedProgress) => void) | undefined,
+    maxNew: number,
+  ): Promise<EmbedResult> {
     const { embedder } = this.load();
     if (!embedder) return { embedded: 0, removed: 0, total: 0 };
     const abort = new AbortController();
     this.abort = abort;
     try {
-      const result = await withFileLock(join(this.dataDir, "embed.lock"), () => this.pass(embedder, abort.signal, onProgress));
-      this.lastError = null;
-      this.quietUntil = 0;
+      const result = await withFileLock(join(this.dataDir, "embed.lock"), () =>
+        this.pass(embedder, abort.signal, onProgress, maxNew),
+      );
+      // Only a pass that got vectors out of the model shows that it answers again.
+      if (result.embedded > 0) {
+        this.lastError = null;
+        this.quietUntil = 0;
+      }
       return result;
     } catch (err) {
       if (!abort.signal.aborted) this.lastError = (err as Error).message;
@@ -226,12 +256,15 @@ export class Embeddings {
     embedder: Embedder,
     signal: AbortSignal,
     onProgress?: (progress: EmbedProgress) => void,
+    maxNew = Infinity,
   ): Promise<EmbedResult> {
     if (this.vectors.model() !== embedder.id) {
       // Only the first vector creates the database; until then there is nothing to reset.
       if (this.vectors.model() !== null || this.vectors.count() > 0) this.vectors.reset(embedder.id);
     }
     const known = this.vectors.known();
+    // Texts made by an older recipe are worked out again; only those that came out different are re-embedded.
+    const recipeChanged = known.size > 0 && this.vectors.textVersion() !== TEXT_VERSION;
     const files = this.store.allFiles();
     // An empty or half-built graph says nothing about which vectors are still wanted.
     const settled = files.size > 0 && this.store.getMeta("dirty") !== "1";
@@ -251,7 +284,7 @@ export class Embeddings {
       // A file that was not parsed (an image, a lock file) has nothing to say beyond its name.
       const usable = nodes.filter((n) => n.kind !== "file" || record.lines > 0);
       if (usable.length === 0) return;
-      const fresh = usable.every((n) => known.get(n.id)?.fileHash === record.hash);
+      const fresh = !recipeChanged && usable.every((n) => known.get(n.id)?.fileHash === record.hash);
       const lines = fresh ? null : this.readLines(path);
       for (const node of usable) {
         if (wanted.size >= MAX_VECTORS) {
@@ -290,13 +323,24 @@ export class Embeddings {
     this.vectors.remove(gone);
     this.vectors.touch(unchanged);
 
+    if (queue.length > maxNew) {
+      // Too much changed to embed before answering: the search goes ahead with the vectors there are.
+      this.log(
+        `embeddings: ${queue.length} nodes changed since their vectors were made; run vertskim embed to bring them up to date`,
+      );
+      return { embedded: 0, removed: gone.length, total: this.vectors.count() };
+    }
     let done = 0;
     onProgress?.({ done, total: queue.length });
     for (let i = 0; i < queue.length; ) {
       if (signal.aborted) throw new Error("stopped");
       const batch: typeof queue = [];
       let chars = 0;
-      while (i < queue.length && batch.length < BATCH_SIZE && (batch.length === 0 || chars + queue[i]!.text.length <= BATCH_CHARS)) {
+      while (
+        i < queue.length &&
+        batch.length < BATCH_SIZE &&
+        (batch.length === 0 || chars + queue[i]!.text.length <= BATCH_CHARS)
+      ) {
         chars += queue[i]!.text.length;
         batch.push(queue[i++]!);
       }
@@ -316,6 +360,7 @@ export class Embeddings {
       done += batch.length;
       onProgress?.({ done, total: queue.length });
     }
+    if (this.vectors.count() > 0 || queue.length > 0) this.vectors.setTextVersion(TEXT_VERSION);
     if (queue.length > 0 || gone.length > 0) {
       this.log(`embeddings: ${queue.length} made, ${gone.length} dropped, ${this.vectors.count()} in all`);
     }
@@ -339,7 +384,10 @@ export class Embeddings {
     let vector = this.queries.get(text);
     if (!vector) {
       try {
-        [vector] = await embedder.embed([text], "query", { timeoutMs: QUERY_TIMEOUT_MS });
+        [vector] = await embedder.embed([text], "query", {
+          timeoutMs: this.answered ? QUERY_TIMEOUT_MS : FIRST_QUERY_TIMEOUT_MS,
+        });
+        this.answered = true;
       } catch (err) {
         this.lastError = (err as Error).message;
         this.quietUntil = Date.now() + COOL_OFF_MS;

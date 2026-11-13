@@ -23,7 +23,12 @@ export interface EmbeddingConfig {
   queryPrefix?: string;
   /** Text put in front of each piece of code or documentation, overriding what is known about the model. */
   documentPrefix?: string;
+  /** How long Ollama keeps the model loaded after a request, in its own format (`30m`, `-1` for always). */
+  keepAlive?: string;
 }
+
+/** Ollama unloads a model after five idle minutes by default, and loading it again delays the next search. */
+const DEFAULT_KEEP_ALIVE = "30m";
 
 export interface EmbedOptions {
   timeoutMs?: number;
@@ -82,7 +87,8 @@ export function checkConfig(raw: unknown): EmbeddingConfig {
   }
   const config: EmbeddingConfig = { provider: provider as ProviderName, model: input.model.trim() };
   if (config.provider !== "transformers") {
-    const url = typeof input.url === "string" && input.url.trim() !== "" ? input.url.trim() : defaultUrl(config.provider);
+    const url =
+      typeof input.url === "string" && input.url.trim() !== "" ? input.url.trim() : defaultUrl(config.provider);
     let parsed: URL;
     try {
       parsed = new URL(url);
@@ -100,6 +106,7 @@ export function checkConfig(raw: unknown): EmbeddingConfig {
     }
     if (typeof input.apiKeyEnv === "string" && input.apiKeyEnv !== "") config.apiKeyEnv = input.apiKeyEnv;
   }
+  if (typeof input.keepAlive === "string" && config.provider === "ollama") config.keepAlive = input.keepAlive;
   if (typeof input.queryPrefix === "string") config.queryPrefix = input.queryPrefix;
   if (typeof input.documentPrefix === "string") config.documentPrefix = input.documentPrefix;
   return config;
@@ -142,7 +149,8 @@ function checkVectors(vectors: Float32Array[], expected: number): Float32Array[]
     throw new Error(`asked for ${expected} vectors, the model returned ${vectors.length}`);
   }
   const dims = vectors[0]?.length ?? 0;
-  if (dims === 0 || vectors.some((v) => v.length !== dims)) throw new Error("the model returned vectors of differing sizes");
+  if (dims === 0 || vectors.some((v) => v.length !== dims))
+    throw new Error("the model returned vectors of differing sizes");
   return vectors;
 }
 
@@ -165,7 +173,8 @@ async function postJson(
   } catch (err) {
     const error = err as Error & { cause?: { code?: string } };
     if (options.signal?.aborted) throw new Error("stopped");
-    if (error.name === "TimeoutError") throw new Error(`${url} did not answer within ${Math.round(timeoutMs / 1000)} s`);
+    if (error.name === "TimeoutError")
+      throw new Error(`${url} did not answer within ${Math.round(timeoutMs / 1000)} s`);
     throw new Error(`could not reach ${url} (${error.cause?.code ?? error.message}); is the model server running?`);
   }
   const text = await response.text();
@@ -204,8 +213,10 @@ class HttpEmbedder implements Embedder {
     if (key) headers.authorization = `Bearer ${key}`;
 
     if (this.config.provider === "ollama") {
-      const body = { model: this.config.model, input };
-      const reply = (await postJson(`${this.config.url}/api/embed`, body, headers, options)) as { embeddings?: number[][] };
+      const body = { model: this.config.model, input, keep_alive: this.config.keepAlive ?? DEFAULT_KEEP_ALIVE };
+      const reply = (await postJson(`${this.config.url}/api/embed`, body, headers, options)) as {
+        embeddings?: number[][];
+      };
       if (!Array.isArray(reply.embeddings)) throw new Error("the model server's reply has no embeddings in it");
       return checkVectors(reply.embeddings.map(normalise), texts.length);
     }
@@ -278,7 +289,10 @@ const EMBEDDING_MODEL_NAME = /embed|bge|e5|minilm|gte|arctic/i;
  * Ask an Ollama server which models it has that are made for embedding.
  * Null when nothing answers at that address.
  */
-export async function ollamaEmbeddingModels(url: string = defaultUrl("ollama"), timeoutMs = 1500): Promise<string[] | null> {
+export async function ollamaEmbeddingModels(
+  url: string = defaultUrl("ollama"),
+  timeoutMs = 1500,
+): Promise<string[] | null> {
   try {
     const response = await fetch(`${url.replace(/\/+$/, "")}/api/tags`, { signal: AbortSignal.timeout(timeoutMs) });
     if (!response.ok) return null;

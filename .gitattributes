@@ -1,0 +1,11 @@
+# Every text file is stored and checked out with LF line endings, on every system.
+* text=auto eol=lf
+
+*.png binary
+*.ico binary
+*.wasm binary
+*.scip binary
+*.db binary
+*.webp binary
+*.gif binary
+*.mp4 binary

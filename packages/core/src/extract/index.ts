@@ -1,21 +1,37 @@
 import type { Extraction } from "../types.js";
 import { extractCode } from "./engine.js";
+import { c, cpp } from "./languages/cpp.js";
 import { csharp } from "./languages/csharp.js";
 import { go } from "./languages/go.js";
 import { java } from "./languages/java.js";
 import { javascript, tsx, typescript } from "./languages/javascript.js";
+import { php } from "./languages/php.js";
 import { python } from "./languages/python.js";
+import { ruby } from "./languages/ruby.js";
 import { rust } from "./languages/rust.js";
 import { extractMarkdown } from "./markdown.js";
 import type { LanguageSpec } from "./spec.js";
 
 /** Bump when extraction output changes, so existing databases are re-indexed. */
-export const EXTRACTOR_VERSION = 3;
+export const EXTRACTOR_VERSION = 6;
 
 /** Files larger than this get a node but are not parsed. */
 export const MAX_PARSE_BYTES = 1_500_000;
 
-const SPECS: Record<string, LanguageSpec> = { javascript, typescript, tsx, python, go, rust, java, csharp };
+const SPECS: Record<string, LanguageSpec> = {
+  javascript,
+  typescript,
+  tsx,
+  python,
+  go,
+  rust,
+  java,
+  csharp,
+  c,
+  cpp,
+  ruby,
+  php,
+};
 
 /** Languages whose files are parsed, for status output and documentation. */
 export function parsedLanguages(): string[] {

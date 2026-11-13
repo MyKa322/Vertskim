@@ -47,9 +47,11 @@ const S = {
   defaults: `${JOBS}defaults.`,
   nightly: `${JOBS}nightly().`,
   weekly: `${JOBS}weekly().`,
+  hourly: `${JOBS}hourly().`,
   monthly: `${JOBS}monthly().`,
   /** A method of the standard library: defined in no document of the index. */
-  libraryUnregister: "scip-typescript npm typescript 5.9.3 lib/`lib.es2021.weakref.d.ts`/FinalizationRegistry#unregister().",
+  libraryUnregister:
+    "scip-typescript npm typescript 5.9.3 lib/`lib.es2021.weakref.d.ts`/FinalizationRegistry#unregister().",
 };
 
 const ID = {
@@ -72,14 +74,17 @@ const ID = {
   store: "src/api/routes.ts#store",
   nightly: "src/jobs.ts#nightly",
   weekly: "src/jobs.ts#weekly",
+  hourly: "src/jobs.ts#hourly",
   monthly: "src/jobs.ts#monthly",
   defaults: "src/jobs.ts#defaults",
   unregister: "src/jobs.ts#Mailer.unregister",
 };
 
 /**
- * Three calls that syntax alone takes for `Mailer.unregister`, the only method of that name.
- * A compiler knows the first is a library method, and has nothing to say about the other two.
+ * Calls on receivers whose type is not written down, which syntax alone takes for
+ * `Mailer.unregister`, the only method of that name. A compiler knows the one in
+ * `nightly` is a library method and the one in `hourly` really is Mailer's, and has
+ * nothing to say about the two on `any`.
  */
 const JOBS_SOURCE = `export class Mailer {
   unregister(): void {}
@@ -87,9 +92,18 @@ const JOBS_SOURCE = `export class Mailer {
 
 const defaults = { retries: 3, delay: 10, jitter: 2, limit: 5 };
 
-export function nightly(registry: FinalizationRegistry<object>): number {
+export function nightly(registry): number {
   registry.unregister(defaults);
   return defaults.retries;
+}
+
+export function hourly(mailer): void {
+  mailer.unregister();
+}
+
+export function both(registry, queue: any): void {
+  registry.unregister(queue);
+  queue.unregister();
 }
 
 export function weekly(queue: any): void {
@@ -142,6 +156,7 @@ function sampleIndex(root: string, options: { tool?: string; projectRoot?: strin
     .def("export const TOKEN_TTL_SECONDS", "TOKEN_TTL_SECONDS", S.ttl)
     .def("export function issueToken()", "issueToken", S.issueToken)
     .def("export function rotate(token", "rotate", S.rotate)
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: this is the fixture's own source text
     .ref("${issueToken()}", "issueToken", S.issueToken);
   index
     .doc("src/api/middleware.ts")
@@ -173,6 +188,10 @@ function sampleIndex(root: string, options: { tool?: string; projectRoot?: strin
     .ref("registry.unregister(defaults)", "unregister", S.libraryUnregister)
     .ref("registry.unregister(defaults)", "defaults", S.defaults)
     .ref("return defaults.retries;", "defaults", S.defaults)
+    .def("export function both(", "both", `${JOBS}both().`)
+    .ref("registry.unregister(queue)", "unregister", S.libraryUnregister)
+    .def("export function hourly(", "hourly", S.hourly)
+    .ref("mailer.unregister();", "unregister", S.unregister)
     .def("export function weekly(", "weekly", S.weekly)
     .def("export function monthly(", "monthly", S.monthly)
     // A local that happens to share the method's name, defined and then passed as an argument.
@@ -232,7 +251,11 @@ describe("reading a SCIP index", () => {
     });
     const documents: ScipDocument[] = [];
     const metadata = readScip(data, (doc) => documents.push(doc));
-    assert.deepEqual(metadata, { projectRoot: "file:///work/sample", toolName: "scip-typescript", toolVersion: "0.4.0" });
+    assert.deepEqual(metadata, {
+      projectRoot: "file:///work/sample",
+      toolName: "scip-typescript",
+      toolVersion: "0.4.0",
+    });
     assert.equal(documents.length, 2);
     const [a, b] = documents as [ScipDocument, ScipDocument];
     assert.equal(a.relativePath, "src/a.ts");
@@ -260,7 +283,7 @@ describe("reading a SCIP index", () => {
 
   test("rejects data that is not an index", () => {
     assert.throws(() => readScip(new Uint8Array(0), () => {}), /does not look like a SCIP index/);
-    assert.throws(() => readScip(new TextEncoder().encode("{ \"not\": \"protobuf\" }"), () => {}));
+    assert.throws(() => readScip(new TextEncoder().encode('{ "not": "protobuf" }'), () => {}));
     const truncated = encodeScip({ documents: [{ path: "a.ts", occurrences: [] }] }).subarray(0, 30);
     assert.throws(() => readScip(truncated, () => {}));
   });
@@ -270,29 +293,37 @@ describe("compiler-accurate edges from a SCIP index", () => {
   test("turns guesses into facts, adds what syntax cannot see and drops wrong guesses", async () => {
     const { root, project } = await openSample();
     try {
-      // What the syntax tree alone gives.
-      assert.equal(edge(project, ID.requireAuth, "calls", ID.refresh)?.confidence, "heuristic");
-      for (const caller of [ID.nightly, ID.weekly, ID.monthly]) {
+      // What the syntax tree alone gives: calls through written types are resolved, the rest are guesses.
+      assert.equal(edge(project, ID.requireAuth, "calls", ID.refresh)?.confidence, "resolved");
+      assert.equal(edge(project, ID.loadSession, "calls", ID.fetch)?.confidence, "resolved");
+      for (const caller of [ID.nightly, ID.hourly, ID.weekly, ID.monthly]) {
         assert.equal(edge(project, caller, "calls", ID.unregister)?.confidence, "heuristic");
       }
-      assert.equal(edge(project, ID.loadSession, "calls", ID.fetch), null);
       assert.deepEqual(project.compilerIndexes(), []);
 
-      sampleIndex(root).write(1);
-      const result = await project.sync();
-      assert.ok(result.resolvedFiles >= 6, "files with facts are re-linked");
-      assert.ok(result.changed > 0, "a new index counts as a change to the graph");
+      const file = sampleIndex(root).write(1);
+      // Found at the project root, but not used until asked for: a repository could ship a misleading one.
+      await project.sync({ full: true });
+      assert.equal(edge(project, ID.hourly, "calls", ID.unregister)?.confidence, "heuristic");
+      assert.deepEqual(
+        project.compilerIndexes().map((s) => [s.path, s.inUse]),
+        [[file, false]],
+      );
+      await project.addCompilerIndex(file);
 
-      // A name-only guess the compiler confirms.
+      // A name-only guess the compiler confirms, and a resolved call it agrees with.
+      assert.equal(edge(project, ID.hourly, "calls", ID.unregister)?.confidence, "exact");
       assert.equal(edge(project, ID.requireAuth, "calls", ID.refresh)?.confidence, "exact");
       // A name-only guess the compiler contradicts: it resolved that call to a library method.
       assert.equal(edge(project, ID.nightly, "calls", ID.unregister), null);
       // Guesses the compiler has no opinion on (the receiver is `any`) stay guesses...
       assert.equal(edge(project, ID.weekly, "calls", ID.unregister)?.confidence, "heuristic");
-      // ...also when a local of the same name is used in the same function.
+      // ...also when a local of the same name is used in the same function,
       assert.equal(edge(project, ID.monthly, "calls", ID.unregister)?.confidence, "heuristic");
+      // ...and when another call of that name in the same function is a library's.
+      assert.equal(edge(project, "src/jobs.ts#both", "calls", ID.unregister)?.confidence, "heuristic");
       assert.equal(edge(project, ID.nightly, "references", ID.defaults)?.confidence, "exact");
-      // Calls through a field typed as an interface: invisible without types.
+      // Calls through a field typed as an interface.
       assert.equal(edge(project, ID.loadSession, "calls", ID.fetch)?.confidence, "exact");
       assert.equal(edge(project, ID.persist, "calls", ID.put)?.confidence, "exact");
       // Edges that were already resolved are confirmed.
@@ -337,8 +368,7 @@ describe("compiler-accurate edges from a SCIP index", () => {
   test("stops trusting a file's facts the moment the file changes", async () => {
     const { root, project } = await openSample();
     try {
-      sampleIndex(root).write(1);
-      await project.sync();
+      await project.addCompilerIndex(sampleIndex(root).write(1));
       assert.equal(edge(project, ID.requireAuth, "calls", ID.refresh)?.confidence, "exact");
 
       const path = "src/api/middleware.ts";
@@ -346,7 +376,7 @@ describe("compiler-accurate edges from a SCIP index", () => {
       await project.sync();
 
       // Its own relationships are back to what the syntax shows...
-      assert.equal(edge(project, ID.requireAuth, "calls", ID.refresh)?.confidence, "heuristic");
+      assert.equal(edge(project, ID.requireAuth, "calls", ID.refresh)?.confidence, "resolved");
       // ...facts in other files that point into it are no longer vouched for...
       assert.equal(edge(project, ID.routes, "calls", ID.requireAuth)?.confidence, "resolved");
       // ...and files that did not change keep theirs.
@@ -371,16 +401,15 @@ describe("compiler-accurate edges from a SCIP index", () => {
       // The index describes session.ts as it was; two lines are then added above everything in it.
       const path = "src/auth/session.ts";
       write(root, path, `// one\n// two\n${readFileSync(join(root, path), "utf8")}`, 1);
-      index.write(2);
-      await project.sync();
+      await project.addCompilerIndex(index.write(2));
 
       const [status] = project.compilerIndexes();
       assert.equal(status?.matched, 6);
       assert.equal(status?.outOfStep, 1);
       assert.equal(status?.filesInUse, 5);
       // Nothing the index says about that file is used, in either direction.
-      assert.equal(edge(project, ID.loadSession, "calls", ID.fetch), null);
-      assert.equal(edge(project, ID.requireAuth, "calls", ID.refresh)?.confidence, "heuristic");
+      assert.equal(edge(project, ID.loadSession, "calls", ID.fetch)?.confidence, "resolved");
+      assert.equal(edge(project, ID.requireAuth, "calls", ID.refresh)?.confidence, "resolved");
       assert.equal(edge(project, ID.SessionStore, "extends", ID.BaseStore)?.confidence, "resolved");
       // The rest of the index still is.
       assert.equal(edge(project, ID.routes, "calls", ID.requireAuth)?.confidence, "exact");
@@ -395,7 +424,7 @@ describe("compiler-accurate edges from a SCIP index", () => {
     try {
       const before = project.store.db.prepare("SELECT src, kind, dst, confidence FROM edges ORDER BY 1, 2, 3").all();
       const file = sampleIndex(root).write(1);
-      await project.sync();
+      await project.addCompilerIndex(file);
       assert.notDeepEqual(
         project.store.db.prepare("SELECT src, kind, dst, confidence FROM edges ORDER BY 1, 2, 3").all(),
         before,
@@ -408,7 +437,10 @@ describe("compiler-accurate edges from a SCIP index", () => {
         project.store.db.prepare("SELECT src, kind, dst, confidence FROM edges ORDER BY 1, 2, 3").all(),
         before,
       );
-      assert.deepEqual(project.compilerIndexes(), []);
+      assert.deepEqual(
+        project.compilerIndexes().map((s) => [s.present, s.filesInUse]),
+        [[false, 0]],
+      );
     } finally {
       await project.close();
     }
@@ -420,7 +452,7 @@ describe("compiler-accurate edges from a SCIP index", () => {
       const elsewhere = join(tempDir("scip"), "sample.scip");
       sampleIndex(root).write(1, elsewhere);
       await project.sync();
-      assert.equal(edge(project, ID.requireAuth, "calls", ID.refresh)?.confidence, "heuristic");
+      assert.equal(edge(project, ID.requireAuth, "calls", ID.refresh)?.confidence, "resolved");
 
       await assert.rejects(() => project.addCompilerIndex(join(root, "no-such.scip")));
       const status = await project.addCompilerIndex(elsewhere);
@@ -437,7 +469,7 @@ describe("compiler-accurate edges from a SCIP index", () => {
         assert.equal(edge(reopened, ID.requireAuth, "calls", ID.refresh)?.confidence, "exact");
 
         assert.equal(await reopened.forgetCompilerIndex(elsewhere), true);
-        assert.equal(edge(reopened, ID.requireAuth, "calls", ID.refresh)?.confidence, "heuristic");
+        assert.equal(edge(reopened, ID.requireAuth, "calls", ID.refresh)?.confidence, "resolved");
         assert.deepEqual(reopened.compilerIndexes(), []);
         assert.equal(await reopened.forgetCompilerIndex(elsewhere), false);
       } finally {
@@ -490,7 +522,7 @@ describe("compiler-accurate edges from a SCIP index", () => {
     const { root, project } = await openSample();
     try {
       // What a package looks like to its users in a monorepo: `dist/x.d.ts`, not `src/x.ts`.
-      const built = (dir: string, file: string, name: string) => PKG + "dist/" + dir + "/`" + file + "`/" + name;
+      const built = (dir: string, file: string, name: string) => `${PKG}dist/${dir}/\`${file}\`/${name}`;
       const index = new FakeIndexBuilder(root);
       index
         .doc("src/api/middleware.ts")
@@ -511,8 +543,7 @@ describe("compiler-accurate edges from a SCIP index", () => {
         // No source in this index defines these: a declaration file with no twin proves nothing.
         .ref("return issueToken();", "issueToken", built("auth", "tokens.d.ts", "issueToken()."))
         .ref("new SessionStore(new RedisClient())", "RedisClient", built("db", "redis.d.ts", "RedisClient#"));
-      index.write(1);
-      await project.sync();
+      await project.addCompilerIndex(index.write(1));
 
       assert.equal(edge(project, ID.routes, "calls", ID.requireAuth)?.confidence, "exact");
       assert.equal(edge(project, ID.store, "calls", ID.SessionStore)?.confidence, "exact");
@@ -527,10 +558,11 @@ describe("compiler-accurate edges from a SCIP index", () => {
     const { root, project } = await openSample();
     try {
       await project.watch();
-      await project.sync({ full: true });
-      assert.equal(edge(project, ID.requireAuth, "calls", ID.refresh)?.confidence, "heuristic");
+      // In use from the start, but with nothing in it yet.
+      await project.addCompilerIndex(new FakeIndexBuilder(root).write(1));
+      assert.equal(edge(project, ID.requireAuth, "calls", ID.refresh)?.confidence, "resolved");
       // The indexer finishes; nobody tells Vertskim.
-      sampleIndex(root).write(1);
+      sampleIndex(root).write(3);
       await project.refresh([ID.requireAuth]);
       assert.equal(edge(project, ID.requireAuth, "calls", ID.refresh)?.confidence, "exact");
     } finally {
@@ -546,7 +578,7 @@ describe("compiler-accurate edges from a SCIP index", () => {
     try {
       const before = logged.store.db.prepare("SELECT src, kind, dst, confidence FROM edges ORDER BY 1, 2, 3").all();
       write(root, "index.scip", "this is not protobuf at all, just text\n".repeat(20), 1);
-      await logged.sync();
+      await logged.addCompilerIndex(join(root, "index.scip"));
       assert.deepEqual(
         logged.store.db.prepare("SELECT src, kind, dst, confidence FROM edges ORDER BY 1, 2, 3").all(),
         before,

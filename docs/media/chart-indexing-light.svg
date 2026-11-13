@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 464" width="860" height="464" role="img" font-family='-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif'>
+<title>Time to index a project for the first time</title>
+<desc>three.js (JavaScript, 1269 files): 8.4 seconds. google/gson (Java, 266 files): 2.8 seconds. google/leveldb (C++, C, 133 files): 2.6 seconds. rack/rack (Ruby, 95 files): 2.1 seconds. Vertskim (TypeScript, 520 files): 1.7 seconds. jbogard/MediatR (C#, 160 files): 1.5 seconds. DaveGamble/cJSON (C, 53 files): 1.4 seconds. slimphp/Slim (PHP, 125 files): 1.1 seconds. go-chi/chi (Go, 90 files): 0.6 seconds. rust-lang/log (Rust, 13 files): 0.4 seconds.</desc>
+<text x="0" y="20" font-size="16" font-weight="600" fill="#1f2328">Time to index a project for the first time</text>
+<text x="0" y="40" font-size="12" fill="#59636e">Seconds on one machine, single-threaded. Later updates only process the files that changed.</text>
+<line x1="0" y1="58" x2="860" y2="58" stroke="#d1d9e0" stroke-width="1" opacity="0.6"/>
+<text x="0" y="76" font-size="13" fill="#1f2328">three.js</text>
+<text x="0" y="91" font-size="11" fill="#6e7781">JavaScript</text>
+<path d="M206 71h488a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-488z" fill="#2a78d6"/>
+<text x="710" y="82.5" font-size="13" fill="#1f2328"><tspan font-weight="600">8.4 s</tspan><tspan dx="8" font-size="12" fill="#59636e">1,269 files</tspan></text>
+<line x1="0" y1="98" x2="860" y2="98" stroke="#d1d9e0" stroke-width="1" opacity="0.6"/>
+<text x="0" y="116" font-size="13" fill="#1f2328">google/gson</text>
+<text x="0" y="131" font-size="11" fill="#6e7781">Java</text>
+<path d="M206 111h160a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-160z" fill="#2a78d6"/>
+<text x="710" y="122.5" font-size="13" fill="#1f2328"><tspan font-weight="600">2.8 s</tspan><tspan dx="8" font-size="12" fill="#59636e">266 files</tspan></text>
+<line x1="0" y1="138" x2="860" y2="138" stroke="#d1d9e0" stroke-width="1" opacity="0.6"/>
+<text x="0" y="156" font-size="13" fill="#1f2328">google/leveldb</text>
+<text x="0" y="171" font-size="11" fill="#6e7781">C++, C</text>
+<path d="M206 151h148.28571428571428a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-148.28571428571428z" fill="#2a78d6"/>
+<text x="710" y="162.5" font-size="13" fill="#1f2328"><tspan font-weight="600">2.6 s</tspan><tspan dx="8" font-size="12" fill="#59636e">133 files</tspan></text>
+<line x1="0" y1="178" x2="860" y2="178" stroke="#d1d9e0" stroke-width="1" opacity="0.6"/>
+<text x="0" y="196" font-size="13" fill="#1f2328">rack/rack</text>
+<text x="0" y="211" font-size="11" fill="#6e7781">Ruby</text>
+<path d="M206 191h119a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-119z" fill="#2a78d6"/>
+<text x="710" y="202.5" font-size="13" fill="#1f2328"><tspan font-weight="600">2.1 s</tspan><tspan dx="8" font-size="12" fill="#59636e">95 files</tspan></text>
+<line x1="0" y1="218" x2="860" y2="218" stroke="#d1d9e0" stroke-width="1" opacity="0.6"/>
+<text x="0" y="236" font-size="13" fill="#1f2328">Vertskim</text>
+<text x="0" y="251" font-size="11" fill="#6e7781">TypeScript</text>
+<path d="M206 231h95.57142857142856a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-95.57142857142856z" fill="#2a78d6"/>
+<text x="710" y="242.5" font-size="13" fill="#1f2328"><tspan font-weight="600">1.7 s</tspan><tspan dx="8" font-size="12" fill="#59636e">520 files</tspan></text>
+<line x1="0" y1="258" x2="860" y2="258" stroke="#d1d9e0" stroke-width="1" opacity="0.6"/>
+<text x="0" y="276" font-size="13" fill="#1f2328">jbogard/MediatR</text>
+<text x="0" y="291" font-size="11" fill="#6e7781">C#</text>
+<path d="M206 271h83.85714285714286a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-83.85714285714286z" fill="#2a78d6"/>
+<text x="710" y="282.5" font-size="13" fill="#1f2328"><tspan font-weight="600">1.5 s</tspan><tspan dx="8" font-size="12" fill="#59636e">160 files</tspan></text>
+<line x1="0" y1="298" x2="860" y2="298" stroke="#d1d9e0" stroke-width="1" opacity="0.6"/>
+<text x="0" y="316" font-size="13" fill="#1f2328">DaveGamble/cJSON</text>
+<text x="0" y="331" font-size="11" fill="#6e7781">C</text>
+<path d="M206 311h78a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-78z" fill="#2a78d6"/>
+<text x="710" y="322.5" font-size="13" fill="#1f2328"><tspan font-weight="600">1.4 s</tspan><tspan dx="8" font-size="12" fill="#59636e">53 files</tspan></text>
+<line x1="0" y1="338" x2="860" y2="338" stroke="#d1d9e0" stroke-width="1" opacity="0.6"/>
+<text x="0" y="356" font-size="13" fill="#1f2328">slimphp/Slim</text>
+<text x="0" y="371" font-size="11" fill="#6e7781">PHP</text>
+<path d="M206 351h60.42857142857143a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-60.42857142857143z" fill="#2a78d6"/>
+<text x="710" y="362.5" font-size="13" fill="#1f2328"><tspan font-weight="600">1.1 s</tspan><tspan dx="8" font-size="12" fill="#59636e">125 files</tspan></text>
+<line x1="0" y1="378" x2="860" y2="378" stroke="#d1d9e0" stroke-width="1" opacity="0.6"/>
+<text x="0" y="396" font-size="13" fill="#1f2328">go-chi/chi</text>
+<text x="0" y="411" font-size="11" fill="#6e7781">Go</text>
+<path d="M206 391h31.14285714285714a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-31.14285714285714z" fill="#2a78d6"/>
+<text x="710" y="402.5" font-size="13" fill="#1f2328"><tspan font-weight="600">0.6 s</tspan><tspan dx="8" font-size="12" fill="#59636e">90 files</tspan></text>
+<line x1="0" y1="418" x2="860" y2="418" stroke="#d1d9e0" stroke-width="1" opacity="0.6"/>
+<text x="0" y="436" font-size="13" fill="#1f2328">rust-lang/log</text>
+<text x="0" y="451" font-size="11" fill="#6e7781">Rust</text>
+<path d="M206 431h19.428571428571427a4 4 0 0 1 4 4v6a4 4 0 0 1 -4 4h-19.428571428571427z" fill="#2a78d6"/>
+<text x="710" y="442.5" font-size="13" fill="#1f2328"><tspan font-weight="600">0.4 s</tspan><tspan dx="8" font-size="12" fill="#59636e">13 files</tspan></text>
+</svg>

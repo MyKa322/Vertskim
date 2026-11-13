@@ -63,7 +63,12 @@ describe("graph views", () => {
     const call = link(view, "src/api/", "calls", "src/auth/session.ts#SessionStore");
     assert.ok(call);
     // The file's own symbols using each other do not show as links to the file hub.
-    assert.ok(view.links.every((l) => l.kind === "contains" || !(l.source === "src/auth/session.ts" && l.target.startsWith("src/auth/session.ts#"))));
+    assert.ok(
+      view.links.every(
+        (l) =>
+          l.kind === "contains" || !(l.source === "src/auth/session.ts" && l.target.startsWith("src/auth/session.ts#")),
+      ),
+    );
     // Every link joins two drawn nodes.
     const drawn = new Set(ids(view));
     assert.ok(view.links.every((l) => drawn.has(l.source) && drawn.has(l.target)));
@@ -72,9 +77,25 @@ describe("graph views", () => {
   });
 
   test("a guess stays marked as one until a certain relationship joins it", () => {
-    const view = project.view({ expanded: ["src/", "src/api/", "src/api/middleware.ts", "src/auth/", "src/auth/session.ts", "src/auth/session.ts#SessionStore"] });
-    const guess = link(view, "src/api/middleware.ts#requireAuth", "calls", "src/auth/session.ts#SessionStore.refresh");
+    const guessView = project.view({
+      expanded: ["tools/", "tools/report.py", "tools/models.py", "tools/models.py#Record"],
+    });
+    const guess = link(guessView, "tools/report.py#build_report", "calls", "tools/models.py#Record.label");
     assert.equal(guess?.heuristic, true);
+    const view = project.view({
+      expanded: [
+        "src/",
+        "src/api/",
+        "src/api/middleware.ts",
+        "src/auth/",
+        "src/auth/session.ts",
+        "src/auth/session.ts#SessionStore",
+      ],
+    });
+    assert.equal(
+      link(view, "src/api/middleware.ts#requireAuth", "calls", "src/auth/session.ts#SessionStore.refresh")?.heuristic,
+      false,
+    );
     const certain = link(view, "src/auth/session.ts#SessionStore.refresh", "calls", "src/auth/tokens.ts");
     assert.equal(certain?.heuristic, false);
   });
@@ -106,7 +127,13 @@ describe("graph views", () => {
   test("can be rooted at a directory", () => {
     const view = project.view({ root: "tools/", expanded: [] });
     assert.equal(view.root, "tools/");
-    assert.deepEqual(ids(view), ["tools/__init__.py", "tools/formatting.py", "tools/models.py", "tools/report.py", "tools/tests/"]);
+    assert.deepEqual(ids(view), [
+      "tools/__init__.py",
+      "tools/formatting.py",
+      "tools/models.py",
+      "tools/report.py",
+      "tools/tests/",
+    ]);
     assert.ok(link(view, "tools/tests/", "imports", "tools/report.py"));
   });
 
@@ -138,7 +165,8 @@ describe("areas in a project dominated by one directory", () => {
   test("split that directory, so its parts get their own colour", async () => {
     const root = tempDir("mono");
     for (const pkg of ["api", "web", "shared"]) {
-      for (const name of ["a", "b", "c"]) write(root, `packages/${pkg}/src/${name}.ts`, `export const ${name} = 1;\n`, 0);
+      for (const name of ["a", "b", "c"])
+        write(root, `packages/${pkg}/src/${name}.ts`, `export const ${name} = 1;\n`, 0);
     }
     write(root, "README.md", "# Mono\n", 0);
     const project = Project.open({ root, dataDir: tempDir("data") });

@@ -1,7 +1,15 @@
 import type { Node } from "@vscode/tree-sitter-wasm";
 import type { Exported, ImportDecl } from "../../types.js";
 import { posixDirname } from "../../util.js";
-import type { DefDecision, DocInfo, LanguageSpec, RawDef, ResolveContext, ResolvedImport, SymbolInfo } from "../spec.js";
+import type {
+  DefDecision,
+  DocInfo,
+  LanguageSpec,
+  RawDef,
+  ResolveContext,
+  ResolvedImport,
+  SymbolInfo,
+} from "../spec.js";
 import { commentAbove, fieldIs, signatureBeforeBody } from "./common.js";
 
 const QUERY = `
@@ -25,10 +33,8 @@ const QUERY = `
 (invocation_expression function: (member_access_expression expression: (_) @qualifier name: (generic_name (identifier) @name))) @ref.call
 (object_creation_expression type: (identifier) @name) @ref.new
 (object_creation_expression type: (generic_name (identifier) @name)) @ref.new
-(base_list (identifier) @name (#match? @name "^I[A-Z]")) @ref.implements
-(base_list (identifier) @name (#not-match? @name "^I[A-Z]")) @ref.extends
-(base_list (generic_name (identifier) @name) (#match? @name "^I[A-Z]")) @ref.implements
-(base_list (generic_name (identifier) @name) (#not-match? @name "^I[A-Z]")) @ref.extends
+(base_list (identifier) @name) @ref.extends
+(base_list (generic_name (identifier) @name)) @ref.extends
 
 (type_parameter name: (identifier) @typeparam)
 (identifier) @ref.ident
@@ -42,6 +48,9 @@ const QUERY = `
 (variable_declaration (variable_declarator name: (identifier) @var (object_creation_expression type: (identifier) @vartype)))
 (property_declaration type: (identifier) @vartype name: (identifier) @var)
 (foreach_statement type: (identifier) @vartype left: (identifier) @var)
+(parameter type: (qualified_name) @vartype name: (identifier) @var)
+(variable_declaration type: (qualified_name) @vartype (variable_declarator name: (identifier) @var))
+(property_declaration type: (qualified_name) @vartype name: (identifier) @var)
 `;
 
 const BUILTINS = new Set(["String", "Object", "Task", "Console", "Math", "var", "nameof", "value"]);
@@ -150,7 +159,14 @@ function parseImport(node: Node): ImportDecl[] {
   let path = match[3]!;
   if (match[2]) {
     // `using Alias = A.B.C;` names a type, or sometimes a namespace.
-    return [{ specifier: path, line, names: [{ local: match[2], imported: path.slice(path.lastIndexOf(".") + 1) }], reexport: false }];
+    return [
+      {
+        specifier: path,
+        line,
+        names: [{ local: match[2], imported: path.slice(path.lastIndexOf(".") + 1) }],
+        reexport: false,
+      },
+    ];
   }
   // `using static A.B.C;` is treated as bringing C's namespace in.
   if (match[1] && path.includes(".")) path = path.slice(0, path.lastIndexOf("."));
@@ -176,7 +192,10 @@ function resolveImport(imp: ImportDecl, _fromFile: string, ctx: ResolveContext):
   const files = csFiles(path, ctx);
   if (files.length > 0) {
     // An alias for a namespace binds the namespace whole.
-    return withDir(files, imp.names.map((n) => (n.local === "*" ? n : { ...n, imported: "*" })));
+    return withDir(
+      files,
+      imp.names.map((n) => (n.local === "*" ? n : { ...n, imported: "*" })),
+    );
   }
   const alias = imp.names.find((n) => n.local !== "*");
   if (alias && path.includes(".")) {
@@ -209,6 +228,19 @@ function ambient(fromFile: string, ctx: ResolveContext): string[] {
   return out;
 }
 
+/** Standard-library methods too common for a name-only match to mean anything. */
+// biome-ignore format: a list of words reads better packed
+const COMMON_MEMBERS = new Set([
+  "ToString", "Equals", "GetHashCode", "GetType", "Select", "Where", "Any", "All", "First", "FirstOrDefault",
+  "Single", "SingleOrDefault", "Last", "LastOrDefault", "Sum", "OrderBy", "OrderByDescending", "ThenBy", "GroupBy",
+  "Add", "Remove", "ContainsKey", "TryGetValue", "AddRange", "Clear", "Wait", "ConfigureAwait", "GetAwaiter",
+  "GetResult", "Invoke", "WriteLine", "WriteLineAsync", "Flush", "Append", "AppendLine", "Format", "Join", "Split",
+  "Trim", "Replace", "Substring", "StartsWith", "EndsWith", "IndexOf", "IsAssignableFrom", "GetInterfaces",
+  "GetMethods", "GetMethod", "GetProperties", "GetProperty", "GetGenericArguments", "GetGenericTypeDefinition",
+  "MakeGenericType", "GetCustomAttributes", "Cast", "OfType", "Concat", "Distinct", "Skip", "Take", "Reverse",
+  "Aggregate", "SelectMany", "ToDictionary", "ToHashSet", "Max", "Min", "Average", "GetEnumerator", "MoveNext",
+]);
+
 export const csharp: LanguageSpec = {
   id: "csharp",
   grammar: "c-sharp",
@@ -219,6 +251,8 @@ export const csharp: LanguageSpec = {
   superNames: new Set(["base"]),
   importsAreExports: false,
   implicitSelf: true,
+  commonMembers: COMMON_MEMBERS,
+  basesByTarget: true,
   ignoredNames: BUILTINS,
   classify,
   outer,

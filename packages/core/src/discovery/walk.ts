@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { lstat, readdir } from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import { join } from "node:path";
 import ignore, { type Ignore } from "ignore";
 import type { FileSubkind } from "../types.js";
@@ -36,6 +37,24 @@ export const DEFAULT_IGNORES = [
   "out/",
   "target/",
   "coverage/",
+  "vendor/",
+  "Pods/",
+  ".svelte-kit/",
+  ".output/",
+  ".vercel/",
+  ".netlify/",
+  ".angular/",
+  ".expo/",
+  ".docusaurus/",
+  ".parcel-cache/",
+  ".nyc_output/",
+  "storybook-static/",
+  ".yarn/",
+  ".pnpm-store/",
+  ".dart_tool/",
+  "*.min.js",
+  "*.min.css",
+  "*.map",
   "*.pyc",
   "*.tsbuildinfo",
   "*.scip",
@@ -152,7 +171,7 @@ class Walker {
     const dirAbs = dirRel === "" ? this.root : join(this.root, dirRel);
     const rules = this.rulesFor(dirRel);
 
-    let entries;
+    let entries: Dirent[];
     try {
       entries = await readdir(dirAbs, { withFileTypes: true });
     } catch {
@@ -193,7 +212,7 @@ class Walker {
       ancestor = ancestor === "" ? segments[i]! : `${ancestor}/${segments[i]}`;
       if (isIgnored(this.rulesFor(parent), ancestor, true)) return;
       const st = await lstat(join(this.root, ancestor)).catch(() => null);
-      if (!st || !st.isDirectory() || st.isSymbolicLink()) return;
+      if (!st?.isDirectory() || st.isSymbolicLink()) return;
     }
     const abs = join(this.root, rel);
     const st = await lstat(abs).catch(() => null);

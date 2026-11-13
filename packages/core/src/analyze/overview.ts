@@ -2,6 +2,10 @@ import { prefixEnd } from "../query/neighbors.js";
 import { rowToNode, type GraphStore } from "../store/store.js";
 import type { GraphNode } from "../types.js";
 import { marks, N_COLUMNS, SYMBOL_KINDS } from "./common.js";
+import { loadUseGraph, reachOf, USE_KINDS, useScore } from "./rank.js";
+
+/** Indirect users are counted up to this many. */
+export const MAX_REACH = 1000;
 
 export interface DirSummary {
   /** Directory node id, e.g. `src/auth/`. */
@@ -23,7 +27,12 @@ export interface Overview {
   looseFiles: string[];
   entryPoints: { node: GraphNode; imports: number }[];
   hubFiles: { node: GraphNode; importers: number }[];
-  hubSymbols: { node: GraphNode; dependents: number }[];
+  /**
+   * The symbols the rest of the code leans on most, directly or through other code.
+   * `dependents` use one directly; `reach` counts everything that uses it in some way,
+   * up to {@link MAX_REACH}.
+   */
+  hubSymbols: { node: GraphNode; dependents: number; reach: number }[];
   externals: { node: GraphNode; importers: number }[];
   docs: GraphNode[];
 }
@@ -70,7 +79,9 @@ export function overview(store: GraphStore, scope: GraphNode, depth = 2): Overvi
   const languages = new Map<string, number>();
   const looseFiles: string[] = [];
   let testFiles = 0;
-  for (const row of store.stmt(`SELECT path, language, subkind FROM files WHERE 1 = 1${where("path")} ORDER BY path`).all(...range)) {
+  for (const row of store
+    .stmt(`SELECT path, language, subkind FROM files WHERE 1 = 1${where("path")} ORDER BY path`)
+    .all(...range)) {
     const path = row.path as string;
     const symbols = symbolCounts.get(path) ?? 0;
     const language = (row.language as string | null) ?? "other";
@@ -103,15 +114,26 @@ export function overview(store: GraphStore, scope: GraphNode, depth = 2): Overvi
     .all(...range)
     .map((row) => ({ node: rowToNode(row), importers: row.c as number }));
 
-  const hubSymbols = store
+  // Ranked by direct users, each weighted by how much it is used in turn (see useScore).
+  const used = store
     .stmt(
-      `SELECT ${N_COLUMNS}, COUNT(DISTINCT e.src) AS c FROM edges e JOIN nodes n ON n.id = e.dst
-       WHERE e.kind IN ('calls', 'references', 'extends', 'implements')
+      `SELECT e.dst AS id, COUNT(DISTINCT e.src) AS c FROM edges e JOIN nodes n ON n.id = e.dst
+       WHERE e.kind IN (${marks(USE_KINDS.length)}) AND e.src != e.dst
          AND n.kind IN (${marks(SYMBOL_KINDS.length)})${where("n.path")}
-       GROUP BY e.dst ORDER BY c DESC, n.id LIMIT 10`,
+       GROUP BY e.dst`,
     )
-    .all(...SYMBOL_KINDS, ...range)
-    .map((row) => ({ node: rowToNode(row), dependents: row.c as number }));
+    .all(...USE_KINDS, ...SYMBOL_KINDS, ...range)
+    .map((row) => ({ id: row.id as string, dependents: row.c as number }));
+  const graph = loadUseGraph(store);
+  const rank = useScore(graph);
+  const rankOf = (id: string) => rank[graph.index.get(id) ?? -1] ?? 0;
+  const hubSymbols = used
+    .sort((a, b) => rankOf(b.id) - rankOf(a.id) || b.dependents - a.dependents || a.id.localeCompare(b.id))
+    .slice(0, 10)
+    .flatMap(({ id, dependents }) => {
+      const node = store.getNode(id);
+      return node ? [{ node, dependents, reach: reachOf(graph, id, MAX_REACH) }] : [];
+    });
 
   const externals = store
     .stmt(

@@ -127,7 +127,18 @@ export class ViewBuilder {
       });
     }
     if (!nodes.has(ROOT)) {
-      nodes.set(ROOT, { id: ROOT, kind: "directory", subkind: null, name: ".", path: "", language: null, parent: null, children: [], files: 0, symbols: 0 });
+      nodes.set(ROOT, {
+        id: ROOT,
+        kind: "directory",
+        subkind: null,
+        name: ".",
+        path: "",
+        language: null,
+        parent: null,
+        children: [],
+        files: 0,
+        symbols: 0,
+      });
     }
     let hasExternal = false;
     for (const node of nodes.values()) {
@@ -210,7 +221,8 @@ export class ViewBuilder {
     const snapshot = this.load();
     const { nodes, edges } = snapshot;
     const maxNodes = Math.min(Math.max(options.maxNodes ?? DEFAULT_MAX_NODES, 10), 5000);
-    const root = nodes.get(options.root ?? ROOT)?.kind === "directory" ? nodes.get(options.root ?? ROOT)! : nodes.get(ROOT)!;
+    const root =
+      nodes.get(options.root ?? ROOT)?.kind === "directory" ? nodes.get(options.root ?? ROOT)! : nodes.get(ROOT)!;
     let truncated = false;
 
     // ---- which containers are open

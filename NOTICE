@@ -1,0 +1,33 @@
+Vertskim
+Copyright 2026 Vertskim
+
+This product includes software developed by the Vertskim project.
+Original repository: https://github.com/MyKa322/Vertskim
+
+Vertskim is licensed under the Apache License, Version 2.0 (see LICENSE).
+Under section 4 of that licence, anyone who distributes Vertskim, a fork of
+it, or a work built on it must:
+
+  - give recipients a copy of the licence;
+  - keep the copyright and attribution notices of the source;
+  - say in every file they changed that they changed it; and
+  - include a readable copy of this NOTICE file, with the credit and the
+    link to the original repository above, in the distribution: in a NOTICE
+    file, in the documentation, or wherever the product shows its
+    third-party notices.
+
+Additions to this file are welcome below this line; the lines above are to
+be kept as they are.
+
+------------------------------------------------------------------------
+
+Third-party material distributed with Vertskim
+
+The file and folder icons of the 3D view (packages/ui/src/icons) come from
+vscode-icons (https://github.com/vscode-icons/vscode-icons) and are licensed
+by its contributors under CC BY-SA 4.0
+(https://creativecommons.org/licenses/by-sa/4.0/). Icons of brands remain
+under their owners' terms. See packages/ui/src/icons/README.md.
+
+The same notice travels with the built 3D view as
+packages/ui/public/THIRD-PARTY-NOTICES.txt.

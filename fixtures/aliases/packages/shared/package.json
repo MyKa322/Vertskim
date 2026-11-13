@@ -1,0 +1,7 @@
+{
+  "name": "@acme/shared",
+  "exports": {
+    ".": "./dist/index.js",
+    "./format": { "types": "./dist/format.d.ts", "default": "./dist/format.js" }
+  }
+}

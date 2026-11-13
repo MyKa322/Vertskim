@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -64,45 +64,95 @@ describe("optional extras from the command line", () => {
   });
   after(async () => {
     await server.close();
-    for (const dir of [root, elsewhere, dataDir]) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    for (const dir of [root, elsewhere, dataDir])
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   test("scip: a compiler index replaces a guess with a fact until it is forgotten", async () => {
-    const callers = ["neighbors", "src/auth/session.ts#SessionStore.refresh", "--in", "--kind", "calls"];
+    const callers = ["neighbors", "tools/models.py#Record.label", "--in", "--kind", "calls"];
     assert.match(await vertskim(["scip"]), /No compiler index in use/);
-    assert.match(await vertskim(callers), /~src\/api\/middleware\.ts#requireAuth/);
+    assert.match(await vertskim(callers), /~tools\/report\.py#build_report/);
 
     const { FakeIndexBuilder } = await coreHelper<ScipHelpers>("scip");
-    const pkg = "scip-typescript npm sample 1.0.0 src/";
+    const label = "scip-python python sample 1.0 `tools.models`/Record#label().";
     const index = new FakeIndexBuilder(root);
     index
-      .doc("src/auth/session.ts")
-      .def("export class SessionStore extends BaseStore {", "SessionStore", `${pkg}auth/\`session.ts\`/SessionStore#`)
-      .def("async refresh(token: string)", "refresh", `${pkg}auth/\`session.ts\`/SessionStore#refresh().`);
+      .doc("tools/models.py")
+      .def("class Record:", "Record", "scip-python python sample 1.0 `tools.models`/Record#")
+      .def("def label(self)", "label", label);
     index
-      .doc("src/api/middleware.ts")
-      .def("export function requireAuth(", "requireAuth", `${pkg}api/\`middleware.ts\`/requireAuth().`)
-      .ref("await store.refresh(token)", "refresh", `${pkg}auth/\`session.ts\`/SessionStore#refresh().`);
+      .doc("tools/report.py")
+      .def("def build_report(", "build_report", "scip-python python sample 1.0 `tools.report`/build_report().")
+      .ref("record.label()", "label", label);
     const file = index.write(1, join(elsewhere, "sample.scip"));
 
-    assert.match(await vertskim(["scip", file]), /sample\.scip \(scip-typescript 0\.4\.0\): 2 of 2 files in use, 1 relationship\n/);
+    assert.match(
+      await vertskim(["scip", file]),
+      /sample\.scip \(scip-typescript 0\.4\.0\): 2 of 2 files in use, 1 relationship\n/,
+    );
     const verified = await vertskim(callers);
-    assert.match(verified, /\n\s+src\/api\/middleware\.ts#requireAuth/);
-    assert.doesNotMatch(verified, /~src\/api\/middleware\.ts#requireAuth/);
-    assert.match(await vertskim(["status"]), /compiler: .*sample\.scip \(scip-typescript 0\.4\.0\): 2 of 2 files in use/);
+    assert.match(verified, /\n\s+tools\/report\.py#build_report/);
+    assert.doesNotMatch(verified, /~tools\/report\.py#build_report/);
+    assert.match(
+      await vertskim(["status"]),
+      /compiler: .*sample\.scip \(scip-typescript 0\.4\.0\): 2 of 2 files in use/,
+    );
     assert.match(await vertskim(["scip"]), /sample\.scip/);
 
     assert.match(await vertskim(["scip", "--forget", file]), /No longer using/);
-    assert.match(await vertskim(callers), /~src\/api\/middleware\.ts#requireAuth/);
+    assert.match(await vertskim(callers), /~tools\/report\.py#build_report/);
     assert.match(await vertskim(["scip", "--forget", file]), /was not in use/);
     assert.match(await fails(["scip", join(elsewhere, "missing.scip")]), /ENOENT|no such file/);
+  });
+
+  test("common mistakes get a plain message, before anything is indexed", async () => {
+    const plain = (args: string[]) =>
+      run(process.execPath, [CLI, ...args]).then(
+        () => "",
+        (err: { stderr: string }) => err.stderr,
+      );
+    assert.match(
+      await plain(["--root", join(root, "no-such-folder"), "status"]),
+      /--root .*no-such-folder does not exist/,
+    );
+    assert.match(
+      await plain(["--root", join(root, "README.md"), "status"]),
+      /--root .*README\.md is a file; give a folder/,
+    );
+    assert.match(
+      await plain(["--root", root, "--data-dir", join(root, "README.md"), "status"]),
+      /--data-dir .*README\.md is a file/,
+    );
+    assert.match(
+      await plain(["--root", root, "--data-dir", dataDir, "ui", "--port", "99999", "--no-open"]),
+      /--port expects a number from 0 to 65535/,
+    );
+    assert.match(
+      await plain(["--root", root, "--data-dir", dataDir, "scip", join(root, "missing.scip")]),
+      /missing\.scip: no such file/,
+    );
+    // Checked before indexing: a fresh data folder stays empty.
+    const fresh = mkdtempSync(join(tmpdir(), "vertskim-extras-fresh-"));
+    try {
+      assert.match(await plain(["--root", root, "--data-dir", fresh, "search"]), /search needs a query/);
+      assert.match(
+        await plain(["--root", root, "--data-dir", fresh, "--depth", "abc", "overview"]),
+        /--depth expects a whole number/,
+      );
+      assert.deepEqual(readdirSync(fresh), []);
+    } finally {
+      rmSync(fresh, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
   });
 
   test("embed: explains what is needed when no local model answers", async () => {
     const message = await fails(["embed"], { OLLAMA_HOST: "127.0.0.1:9" });
     assert.match(message, /no Ollama server answers on this machine/);
     assert.match(message, /vertskim embed --model <name>/);
-    assert.match(await fails(["embed", "--provider", "openai", "--url", "https://api.example.com/v1", "--model", "x"]), /not on this machine/);
+    assert.match(
+      await fails(["embed", "--provider", "openai", "--url", "https://api.example.com/v1", "--model", "x"]),
+      /not on this machine/,
+    );
     assert.match(await fails(["embed", "--provider", "ollama"]), /embed needs --model/);
     assert.doesNotMatch(await vertskim(["status"]), /meaning:/);
   });
@@ -127,7 +177,10 @@ describe("optional extras from the command line", () => {
     assert.match(await vertskim(["embed"]), /0 vectors made, 0 dropped/);
 
     // Another model on the same server: provider and address carry over.
-    assert.match(await vertskim(["embed", "--model", "all-minilm"]), /Search by meaning is on: ollama all-minilm\n\s+5\d vectors made/);
+    assert.match(
+      await vertskim(["embed", "--model", "all-minilm"]),
+      /Search by meaning is on: ollama all-minilm\n\s+5\d vectors made/,
+    );
 
     assert.match(await vertskim(["embed", "--off"]), /Search by meaning is off/);
     assert.match(await vertskim(question), /No matches/);

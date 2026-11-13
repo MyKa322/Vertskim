@@ -50,7 +50,7 @@ function startIds(store: GraphStore, node: GraphNode): string[] {
 
 /** Breadth-first search from any of `starts` to the first node inside `goal`. */
 function shortest(
-  store: GraphStore,
+  _store: GraphStore,
   starts: string[],
   goal: GraphNode,
   expand: (id: string) => Hop[],
@@ -89,7 +89,12 @@ function shortest(
  * The shortest chain of relationships between two nodes. Tries the direction
  * asked for, then the opposite one, then any connection at all.
  */
-export function findPath(store: GraphStore, from: GraphNode, to: GraphNode, options: PathOptions = {}): PathResult | null {
+export function findPath(
+  store: GraphStore,
+  from: GraphNode,
+  to: GraphNode,
+  options: PathOptions = {},
+): PathResult | null {
   const maxHops = Math.min(Math.max(options.maxHops ?? 6, 1), 12);
   const kinds = (options.edgeKinds?.length ? options.edgeKinds : EDGE_KINDS.filter((k) => k !== "contains")).filter(
     (k) => (EDGE_KINDS as readonly string[]).includes(k),
@@ -102,8 +107,12 @@ export function findPath(store: GraphStore, from: GraphNode, to: GraphNode, opti
   const inStmt = store.stmt(
     `SELECT src AS other, kind, confidence, line FROM edges WHERE dst = ? AND kind IN (${marks(kinds.length)})`,
   );
-  const containsOut = store.stmt("SELECT dst AS other, kind, confidence, line FROM edges WHERE src = ? AND kind = 'contains'");
-  const containsIn = store.stmt("SELECT src AS other, kind, confidence, line FROM edges WHERE dst = ? AND kind = 'contains'");
+  const containsOut = store.stmt(
+    "SELECT dst AS other, kind, confidence, line FROM edges WHERE src = ? AND kind = 'contains'",
+  );
+  const containsIn = store.stmt(
+    "SELECT src AS other, kind, confidence, line FROM edges WHERE dst = ? AND kind = 'contains'",
+  );
   const toHops = (rows: Record<string, unknown>[], direction: "out" | "in"): Hop[] =>
     rows.map((r) => ({
       other: r.other as string,

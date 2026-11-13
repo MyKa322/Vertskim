@@ -1,7 +1,15 @@
 import type { Node } from "@vscode/tree-sitter-wasm";
 import type { Exported, ImportDecl } from "../../types.js";
 import { posixDirname, posixJoin, truncate } from "../../util.js";
-import type { DefDecision, DocInfo, LanguageSpec, RawDef, ResolveContext, ResolvedImport, SymbolInfo } from "../spec.js";
+import type {
+  DefDecision,
+  DocInfo,
+  LanguageSpec,
+  RawDef,
+  ResolveContext,
+  ResolvedImport,
+  SymbolInfo,
+} from "../spec.js";
 import { commentAbove, fieldIs, signatureBeforeBody, unquote } from "./common.js";
 
 const QUERY = `
@@ -19,6 +27,8 @@ const QUERY = `
 (composite_literal type: (qualified_type package: (package_identifier) @qualifier name: (type_identifier) @name)) @ref.new
 (field_declaration !name type: (type_identifier) @name) @ref.extends
 (field_declaration !name type: (pointer_type (type_identifier) @name)) @ref.extends
+(interface_type (type_elem . (type_identifier) @name .)) @ref.extends
+(interface_type (type_elem . (qualified_type package: (package_identifier) @qualifier name: (type_identifier) @name) .)) @ref.extends
 (qualified_type package: (package_identifier) @qualifier name: (type_identifier) @name) @ref.type
 
 (type_identifier) @ref.type
@@ -32,6 +42,11 @@ const QUERY = `
 (parameter_declaration name: (identifier) @var type: (pointer_type (qualified_type) @vartype))
 (var_spec name: (identifier) @var type: (type_identifier) @vartype)
 (var_spec name: (identifier) @var type: (pointer_type (type_identifier) @vartype))
+(var_spec name: (identifier) @var type: (qualified_type) @vartype)
+(var_spec name: (identifier) @var type: (pointer_type (qualified_type) @vartype))
+(short_var_declaration
+  left: (expression_list . (identifier) @var)
+  right: (expression_list . (call_expression function: (_) @varcall) .))
 (field_declaration name: (field_identifier) @var type: (type_identifier) @vartype)
 (field_declaration name: (field_identifier) @var type: (pointer_type (type_identifier) @vartype))
 (field_declaration name: (field_identifier) @var type: (qualified_type) @vartype)
@@ -44,6 +59,7 @@ const QUERY = `
   right: (expression_list . (unary_expression operand: (composite_literal type: [(type_identifier) (qualified_type)] @vartype)) .))
 `;
 
+// biome-ignore format: a list of words reads better packed
 const BUILTINS = new Set([
   "string", "bool", "byte", "rune", "error", "any", "int", "int8", "int16", "int32", "int64", "uint", "uint8",
   "uint16", "uint32", "uint64", "uintptr", "float32", "float64", "complex64", "complex128", "nil", "true", "false",
@@ -107,7 +123,7 @@ function exported(def: RawDef): Exported {
   return /^\p{Lu}/u.test(def.name) ? 1 : 0;
 }
 
-function signature(def: RawDef, outerNode: Node, source: string): string | null {
+function signature(def: RawDef, _outerNode: Node, source: string): string | null {
   const node = def.node;
   if (node.type === "type_spec" || node.type === "type_alias") {
     const body = node.childForFieldName("type");

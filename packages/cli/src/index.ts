@@ -1,8 +1,25 @@
 #!/usr/bin/env node
+import { existsSync, type Stats, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { ollamaEmbeddingModels, Project, type ScipSourceStatus } from "@vertskim/core";
-import { findTool, formatBenchmark, runBenchmark, serveStdio, VERSION } from "@vertskim/mcp";
+import {
+  measureAnswers,
+  measureEdgeAccuracy,
+  ollamaEmbeddingModels,
+  Project,
+  readQuestions,
+  stripControl,
+  type ScipSourceStatus,
+} from "@vertskim/core";
+import {
+  findTool,
+  formatAnswerQuality,
+  formatBenchmark,
+  formatEdgeAccuracy,
+  runBenchmark,
+  serveStdio,
+  VERSION,
+} from "@vertskim/mcp";
 import { findRunningUi, openInBrowser, UiBridge } from "@vertskim/server";
 
 const HELP = `vertskim ${VERSION} - a local knowledge graph of your project for AI assistants
@@ -25,6 +42,8 @@ Usage:
   vertskim note <id> <text>          Leave a note on a node (kept outside the project)
   vertskim notes [id]                List notes: on one node and what it contains, or all of them
   vertskim bench                     Measure how many tokens the graph saves on this project
+  vertskim bench --scip <file>       Measure how often relationships from syntax alone are right, against a SCIP index
+  vertskim bench --questions <file>  Measure how well search and context answer a set of questions
 
   vertskim scip [file]               Use a SCIP index for compiler-accurate relationships; no file: list those in use
   vertskim embed                     Switch on search by meaning with a local embedding model, and make the vectors
@@ -46,6 +65,8 @@ Options:
   --remove <n>        note: delete note number n
   --samples <n>       bench: how many symbols and files to sample (default 40)
   --json              bench: print the measurements as JSON
+  --questions <file>  bench: a question set, {"questions": [{"ask": "...", "expect": ["node id", ...]}]}
+  --scip <file>       bench: compare with this compiler index (the project's own index is left alone)
   --forget            scip: stop using the given index file
   --provider <name>   embed: ollama (default), openai (any server speaking that dialect) or transformers
   --model <name>      embed: the embedding model, as the provider names it
@@ -62,6 +83,7 @@ Options:
 The project directory is only ever read. Nothing is written inside it.`;
 
 function describeIndex(index: ScipSourceStatus): string {
+  if (!index.inUse) return `${index.path}: found, not in use until you run \`vertskim scip ${index.path}\``;
   if (!index.present) return `${index.path}: missing`;
   if (index.documents === 0) return `${index.path}: could not be read as a SCIP index`;
   const skipped = index.outOfStep > 0 ? `, ${index.outOfStep} changed since it was built` : "";
@@ -76,43 +98,82 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-async function main(): Promise<void> {
-  let parsed;
+/** Every option the command line accepts. */
+const OPTIONS = {
+  root: { type: "string" },
+  "data-dir": { type: "string" },
+  kind: { type: "string", multiple: true },
+  path: { type: "string" },
+  limit: { type: "string" },
+  source: { type: "boolean" },
+  in: { type: "boolean" },
+  out: { type: "boolean" },
+  depth: { type: "string" },
+  "no-tests": { type: "boolean" },
+  hops: { type: "string" },
+  seed: { type: "string", multiple: true },
+  detail: { type: "string" },
+  rebuild: { type: "boolean" },
+  remove: { type: "string" },
+  samples: { type: "string" },
+  json: { type: "boolean" },
+  forget: { type: "boolean" },
+  questions: { type: "string" },
+  scip: { type: "string" },
+  provider: { type: "string" },
+  model: { type: "string" },
+  url: { type: "string" },
+  "allow-remote": { type: "boolean" },
+  "key-env": { type: "string" },
+  off: { type: "boolean" },
+  port: { type: "string" },
+  "no-open": { type: "boolean" },
+  "max-tokens": { type: "string" },
+  help: { type: "boolean", short: "h" },
+  version: { type: "boolean", short: "v" },
+} as const;
+
+/** The command line, as `node:util` reads it. Throws on an unknown option. */
+function parseCommandLine() {
+  return parseArgs({ allowPositionals: true, options: OPTIONS });
+}
+
+/** What went wrong with a file or folder, in words rather than an error code. */
+function explain(err: NodeJS.ErrnoException): string {
+  const where = err.path ? ` ${err.path}` : "";
+  switch (err.code) {
+    case "ENOENT":
+      return `no such file or folder:${where}`;
+    case "EACCES":
+    case "EPERM":
+      return `not allowed to read or write${where}`;
+    case "EEXIST":
+      return `${where.trim() || "it"} is a file where a folder is needed`;
+    case "ENOTDIR":
+      return `a part of the path is a file, not a folder:${where}`;
+    case "ENOSPC":
+      return "the disk is full";
+    default:
+      return err.message;
+  }
+}
+
+/** Stop early, with a clear message, when a folder given on the command line will not do. */
+function checkFolder(path: string, option: string, mustExist: boolean): void {
+  let stat: Stats;
   try {
-    parsed = parseArgs({
-      allowPositionals: true,
-      options: {
-        root: { type: "string" },
-        "data-dir": { type: "string" },
-        kind: { type: "string", multiple: true },
-        path: { type: "string" },
-        limit: { type: "string" },
-        source: { type: "boolean" },
-        in: { type: "boolean" },
-        out: { type: "boolean" },
-        depth: { type: "string" },
-        "no-tests": { type: "boolean" },
-        hops: { type: "string" },
-        seed: { type: "string", multiple: true },
-        detail: { type: "string" },
-        rebuild: { type: "boolean" },
-        remove: { type: "string" },
-        samples: { type: "string" },
-        json: { type: "boolean" },
-        forget: { type: "boolean" },
-        provider: { type: "string" },
-        model: { type: "string" },
-        url: { type: "string" },
-        "allow-remote": { type: "boolean" },
-        "key-env": { type: "string" },
-        off: { type: "boolean" },
-        port: { type: "string" },
-        "no-open": { type: "boolean" },
-        "max-tokens": { type: "string" },
-        help: { type: "boolean", short: "h" },
-        version: { type: "boolean", short: "v" },
-      },
-    });
+    stat = statSync(path);
+  } catch {
+    if (mustExist) fail(`${option} ${path} does not exist`);
+    return;
+  }
+  if (!stat.isDirectory()) fail(`${option} ${path} is a file; give a folder`);
+}
+
+async function main(): Promise<void> {
+  let parsed: ReturnType<typeof parseCommandLine>;
+  try {
+    parsed = parseCommandLine();
   } catch (err) {
     fail(`${(err as Error).message}\nRun \`vertskim --help\` for usage.`);
   }
@@ -130,6 +191,8 @@ async function main(): Promise<void> {
 
   const root = resolve(values.root ?? process.env.VERTSKIM_ROOT ?? process.cwd());
   const dataDir = values["data-dir"];
+  checkFolder(root, values.root ? "--root" : process.env.VERTSKIM_ROOT ? "VERTSKIM_ROOT" : "the current folder", true);
+  if (dataDir) checkFolder(resolve(dataDir), "--data-dir", false);
   const number = (text: string | undefined, name: string): number | undefined => {
     if (text === undefined) return undefined;
     const n = Number(text);
@@ -208,7 +271,7 @@ async function main(): Promise<void> {
     },
     context: () => {
       if (rest.length === 0 && !values.seed?.length) {
-        fail("context needs a task or a --seed, e.g. `vertskim context \"rotate refresh tokens\"`");
+        fail('context needs a task or a --seed, e.g. `vertskim context "rotate refresh tokens"`');
       }
       return {
         tool: "graph_context",
@@ -219,7 +282,7 @@ async function main(): Promise<void> {
       const remove = number(values.remove, "remove");
       if (remove !== undefined && rest.length === 0) return { tool: "graph_annotate", args: { remove } };
       if (rest.length < 2) {
-        fail("note needs an id and the text, e.g. `vertskim note src/index.ts \"entry point; keep it small\"`");
+        fail('note needs an id and the text, e.g. `vertskim note src/index.ts "entry point; keep it small"`');
       }
       return { tool: "graph_annotate", args: { id: rest[0], note: rest.slice(1).join(" "), remove } };
     },
@@ -232,6 +295,26 @@ async function main(): Promise<void> {
   const builtin = ["index", "status", "watch", "ui", "bench", "scip", "embed"];
   if (!builtin.includes(command) && !queries[command]) {
     fail(`unknown command "${command}"\nRun \`vertskim --help\` for usage.`);
+  }
+  // Mistakes in the arguments are reported before anything is indexed, which on a large project takes a while.
+  const planned = queries[command]?.();
+  const port = number(values.port, "port");
+  if (port !== undefined && (port < 0 || port > 65535)) fail(`--port expects a number from 0 to 65535, got ${port}`);
+  if (command === "scip" && rest[0] && !values.forget) {
+    try {
+      if (!statSync(resolve(rest[0])).isFile()) fail(`${resolve(rest[0])} is a folder; give the index file`);
+    } catch {
+      fail(`${resolve(rest[0])}: no such file`);
+    }
+  }
+  if (command === "bench") {
+    for (const [option, file] of [
+      ["--scip", values.scip],
+      ["--questions", values.questions],
+    ] as const) {
+      if (file && !existsSync(resolve(file))) fail(`${option} ${resolve(file)}: no such file`);
+    }
+    number(values.samples, "samples");
   }
 
   const log = (message: string) => process.stderr.write(`[vertskim] ${message}\n`);
@@ -265,7 +348,7 @@ async function main(): Promise<void> {
       await project.close();
       return;
     }
-    const bridge = new UiBridge(project, { port: number(values.port, "port"), log });
+    const bridge = new UiBridge(project, { port, log });
     await project.watch();
     let link: string;
     try {
@@ -318,6 +401,11 @@ async function main(): Promise<void> {
         `project:  ${project.root}\ndata:     ${project.dataDir}\n` +
           `indexed:  ${status.files} files, ${status.nodes} nodes, ${status.edges} edges\n`,
       );
+      for (const error of status.syntaxErrors) {
+        process.stdout.write(
+          `syntax:   ${error.path}:${error.line}${error.keptSymbols ? " (symbols from the last version that parsed)" : ""}\n`,
+        );
+      }
       for (const index of project.compilerIndexes()) process.stdout.write(`compiler: ${describeIndex(index)}\n`);
       const meaning = project.embeddingStatus();
       if (meaning.enabled) {
@@ -330,12 +418,11 @@ async function main(): Promise<void> {
     if (command === "scip") {
       if (rest.length > 1) fail("scip takes at most one index file, e.g. `vertskim scip build/index.scip`");
       if (values.forget) {
-        if (!rest[0]) fail("--forget needs the index file to stop using, e.g. `vertskim scip --forget build/index.scip`");
+        if (!rest[0])
+          fail("--forget needs the index file to stop using, e.g. `vertskim scip --forget build/index.scip`");
         const known = await project.forgetCompilerIndex(resolve(rest[0]));
         process.stdout.write(
-          known
-            ? `No longer using ${resolve(rest[0])}.\n`
-            : `${resolve(rest[0])} was not in use. An index.scip at the project root is used for as long as it is there.\n`,
+          known ? `No longer using ${resolve(rest[0])}.\n` : `${resolve(rest[0])} was not in use.\n`,
         );
         return;
       }
@@ -346,11 +433,11 @@ async function main(): Promise<void> {
       }
       await project.sync();
       const indexes = project.compilerIndexes();
-      if (indexes.length === 0) {
+      if (!indexes.some((index) => index.inUse)) {
         process.stdout.write(
           "No compiler index in use; relationships come from syntax alone.\n" +
             "Run a SCIP indexer for your language (scip-typescript, scip-python, scip-java, rust-analyzer scip, ...)\n" +
-            "and point at its output: vertskim scip <file>. An index.scip at the project root is found by itself.\n",
+            "and point at its output: vertskim scip <file>, even for an index.scip at the project root.\n",
         );
       }
       for (const index of indexes) process.stdout.write(`${describeIndex(index)}\n`);
@@ -380,7 +467,8 @@ async function main(): Promise<void> {
         } catch (err) {
           const message = (err as Error).message;
           // Ollama names the model it lacks but not the way to get it.
-          const hint = provider === "ollama" && /not found/.test(message) ? `\nGet it with \`ollama pull ${model}\`.` : "";
+          const hint =
+            provider === "ollama" && /not found/.test(message) ? `\nGet it with \`ollama pull ${model}\`.` : "";
           fail(message + hint);
         }
       } else if (!before.enabled) {
@@ -404,7 +492,9 @@ async function main(): Promise<void> {
         const percent = total === 0 ? 100 : Math.floor((done / total) * 100);
         if (percent === last || (percent % 10 !== 0 && !process.stderr.isTTY)) return;
         last = percent;
-        process.stderr.write(process.stderr.isTTY ? `\rembedding ${done} of ${total}` : `embedding ${done} of ${total}\n`);
+        process.stderr.write(
+          process.stderr.isTTY ? `\rembedding ${done} of ${total}` : `embedding ${done} of ${total}\n`,
+        );
       });
       if (process.stderr.isTTY && last >= 0) process.stderr.write("\n");
       const after = project.embeddingStatus();
@@ -429,21 +519,45 @@ async function main(): Promise<void> {
       return;
     }
     if (command === "bench") {
+      if (values.scip || values.questions) {
+        const parts: string[] = [];
+        const json: Record<string, unknown> = {};
+        if (values.scip) {
+          const accuracy = await measureEdgeAccuracy(project.root, resolve(values.scip));
+          json.edges = accuracy;
+          parts.push(formatEdgeAccuracy(accuracy));
+        }
+        if (values.questions) {
+          const quality = await measureAnswers(project, readQuestions(resolve(values.questions)));
+          json.answers = quality;
+          parts.push(formatAnswerQuality(quality));
+        }
+        process.stdout.write(`${values.json ? JSON.stringify(json, null, 2) : parts.join("\n\n")}\n`);
+        return;
+      }
       const measured = await runBenchmark(project, { samples: number(values.samples, "samples") });
       process.stdout.write(`${values.json ? JSON.stringify(measured, null, 2) : formatBenchmark(measured)}\n`);
       return;
     }
-    const { tool, args } = queries[command]!();
+    const { tool, args } = planned!;
     const maxTokens = number(values["max-tokens"], "max-tokens");
     if (maxTokens !== undefined && tool !== "graph_path") args.max_tokens = maxTokens;
     for (const key of Object.keys(args)) if (args[key] === undefined) delete args[key];
-    process.stdout.write(`${await findTool(tool)!.run(project, args, { author: () => "command line" })}\n`);
+    process.stdout.write(
+      `${stripControl(await findTool(tool)!.run(project, args, { author: () => "command line" }))}\n`,
+    );
   } finally {
     await project.close();
   }
 }
 
 main().catch((err: unknown) => {
-  const message = err instanceof Error ? err.message : String(err);
-  fail(message);
+  const error = err as NodeJS.ErrnoException;
+  fail(
+    error && typeof error === "object" && "code" in error
+      ? explain(error)
+      : err instanceof Error
+        ? err.message
+        : String(err),
+  );
 });

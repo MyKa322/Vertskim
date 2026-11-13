@@ -45,6 +45,8 @@ export interface ScipDocument {
   positionEncoding: number;
   occurrences: ScipOccurrence[];
   symbols: ScipSymbol[];
+  /** The source text the indexer saw, when it chose to include it. */
+  text?: string;
 }
 
 export interface ScipMetadata {
@@ -251,11 +253,14 @@ function readDocument(reader: Reader): ScipDocument {
       case 4:
         doc.language = reader.string();
         return true;
+      case 5:
+        doc.text = reader.string();
+        return true;
       case 6:
         doc.positionEncoding = reader.varint();
         return true;
       default:
-        return false; // the embedded source text (5) is skipped without being decoded
+        return false;
     }
   });
   return doc;

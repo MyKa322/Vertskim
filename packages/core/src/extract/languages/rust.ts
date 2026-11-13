@@ -1,7 +1,16 @@
 import type { Node } from "@vscode/tree-sitter-wasm";
 import type { Exported, ImportDecl } from "../../types.js";
 import { posixBasename, posixDirname, posixJoin } from "../../util.js";
-import type { DefDecision, DocInfo, LanguageSpec, RawDef, ResolveContext, ResolvedImport, SymbolInfo } from "../spec.js";
+import type {
+  DefDecision,
+  DocInfo,
+  LanguageSpec,
+  RawDef,
+  ResolveContext,
+  ResolvedImport,
+  SymbolInfo,
+  TokenCall,
+} from "../spec.js";
 import { ancestor, commentAbove, fieldIs, signatureBeforeBody } from "./common.js";
 
 const QUERY = `
@@ -23,6 +32,8 @@ const QUERY = `
 (call_expression function: (generic_function function: (scoped_identifier path: (_) @qualifier name: (identifier) @name))) @ref.call
 (call_expression function: (generic_function function: (field_expression value: (_) @qualifier field: (field_identifier) @name))) @ref.call
 (macro_invocation macro: (identifier) @name) @ref.call
+(macro_invocation (token_tree) @scan)
+(macro_rule right: (token_tree) @scan)
 (struct_expression name: (type_identifier) @name) @ref.new
 
 (impl_item trait: (type_identifier) @name type: (type_identifier) @subject) @ref.implements
@@ -50,6 +61,7 @@ const QUERY = `
 (field_declaration name: (field_identifier) @var type: (type_identifier) @vartype)
 `;
 
+// biome-ignore format: a list of words reads better packed
 const BUILTINS = new Set([
   "Self", "String", "Vec", "Option", "Result", "Box", "Rc", "Arc", "HashMap", "HashSet", "BTreeMap", "BTreeSet",
   "Some", "None", "Ok", "Err", "str", "bool", "char", "usize", "isize", "u8", "u16", "u32", "u64", "u128", "i8",
@@ -151,6 +163,61 @@ function isIdentUsage(node: Node): boolean {
   }
 }
 
+/** Tokens a receiver or path is made of: `self.items`, `crate::cart`, `$crate::util`. */
+const PATH_TOKENS = new Set(["identifier", "self", "super", "crate", "metavariable"]);
+
+/** The `(…)` of a call. */
+function isArgs(node: Node | undefined): boolean {
+  return node?.type === "token_tree" && node.child(0)?.type === "(";
+}
+
+/** What is written before the token at `at`, walking back over `a.b`, `a::b`, `b()` and `?`. */
+function receiverBefore(tokens: Node[], at: number): { receiver: string | null; chained: boolean } {
+  const segments: string[] = [];
+  let chained = false;
+  let i = at - 1;
+  while (i >= 0 && (tokens[i]!.type === "." || tokens[i]!.type === "::")) {
+    i--;
+    while (i >= 0 && tokens[i]!.type === "?") i--;
+    if (isArgs(tokens[i]) && i > 0 && PATH_TOKENS.has(tokens[i - 1]!.type)) {
+      chained = true; // `b()` in `a.b().c()`
+      i--;
+    }
+    const segment = tokens[i];
+    if (!segment || !PATH_TOKENS.has(segment.type)) return { receiver: "?", chained: false };
+    segments.unshift(segment.text === "$crate" ? "crate" : segment.text);
+    i--;
+  }
+  if (segments.length === 0) return { receiver: null, chained: false };
+  if (!chained) return { receiver: segments.join("."), chained };
+  const root = segments[0] === "self" && segments.length > 1 ? `self.${segments[1]}` : segments[0]!;
+  return { receiver: root, chained };
+}
+
+/**
+ * Calls among a macro's tokens (`println!("{}", total(&cart))`, `assert!(cart.is_empty())`),
+ * which the grammar leaves unparsed: a name directly followed by `(…)`, or by `!` and a
+ * token tree. Nested token trees are read too.
+ */
+function scanCalls(tokens: Node): TokenCall[] {
+  const out: TokenCall[] = [];
+  const stack: Node[] = [tokens];
+  while (stack.length > 0) {
+    const tree = stack.pop()!;
+    const children = tree.children.filter((c): c is Node => c !== null);
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i]!;
+      if (child.type === "token_tree") stack.push(child);
+      if (child.type !== "identifier") continue;
+      const next = children[i + 1];
+      const isMacro = next?.type === "!" && children[i + 2]?.type === "token_tree";
+      if (!isMacro && !isArgs(next)) continue;
+      out.push({ name: child, ...receiverBefore(children, i) });
+    }
+  }
+  return out;
+}
+
 /** Flatten a `use` tree into one path per imported name. */
 function usePaths(node: Node, prefix: string[], out: { path: string[]; alias: string | null; glob: boolean }[]): void {
   switch (node.type) {
@@ -164,12 +231,21 @@ function usePaths(node: Node, prefix: string[], out: { path: string[]; alias: st
     case "use_as_clause": {
       const path = node.childForFieldName("path");
       const alias = node.childForFieldName("alias");
-      if (path) out.push({ path: [...prefix, ...path.text.split("::").map((s) => s.trim())], alias: alias?.text ?? null, glob: false });
+      if (path)
+        out.push({
+          path: [...prefix, ...path.text.split("::").map((s) => s.trim())],
+          alias: alias?.text ?? null,
+          glob: false,
+        });
       return;
     }
     case "use_wildcard": {
       const path = node.namedChild(0);
-      out.push({ path: [...prefix, ...(path ? path.text.split("::").map((s) => s.trim()) : [])], alias: null, glob: true });
+      out.push({
+        path: [...prefix, ...(path ? path.text.split("::").map((s) => s.trim()) : [])],
+        alias: null,
+        glob: true,
+      });
       return;
     }
     case "scoped_use_list": {
@@ -310,6 +386,10 @@ function followPath(segments: string[], fromFile: string, ctx: ResolveContext): 
     dir = own.src;
     file = rootFile(own, ctx);
     i = 1;
+  } else if (/^[A-Z]/.test(head)) {
+    // `pub use VisitSource as Visitor;`, `use Kind::*;`: crates are lower-case, so this names
+    // something already in scope here (in Rust 2018 a path may start at such an item).
+    return { file: fromFile, rest: segments, external: null };
   } else {
     const other = crates(ctx).find((c) => c.name === head);
     if (!other) return { file: null, rest: segments, external: head };
@@ -336,7 +416,12 @@ function resolveImport(imp: ImportDecl, fromFile: string, ctx: ResolveContext): 
   if (target.external) {
     const std = target.external === "std" || target.external === "core" || target.external === "alloc";
     const name = std ? "std" : target.external;
-    return [{ external: { id: `ext:${std ? "rust" : "cargo"}/${name}`, name, ecosystem: std ? "rust" : "cargo" }, names: imp.names }];
+    return [
+      {
+        external: { id: `ext:${std ? "rust" : "cargo"}/${name}`, name, ecosystem: std ? "rust" : "cargo" },
+        names: imp.names,
+      },
+    ];
   }
   if (!target.file) return [{ names: imp.names }];
   const glob = imp.names.some((n) => n.local === "*");
@@ -353,6 +438,19 @@ function resolveQualifier(qualifier: string, fromFile: string, ctx: ResolveConte
   return target.file && target.rest.length === 0 && target.file !== fromFile ? target.file : null;
 }
 
+/** Standard-library methods too common for a name-only match to mean anything. */
+// biome-ignore format: a list of words reads better packed
+const COMMON_MEMBERS = new Set([
+  "cmp", "partial_cmp", "eq", "ne", "hash", "fmt", "from", "as_ref", "as_mut", "borrow", "borrow_mut", "default",
+  "to_owned", "unwrap_or", "unwrap_or_else", "unwrap_or_default", "map_err", "ok", "err", "and_then", "or_else",
+  "is_some", "is_none", "is_ok", "is_err", "ok_or", "as_deref", "take", "replace", "push_str", "chars", "bytes",
+  "lines", "trim", "starts_with", "ends_with", "contains_key", "entry", "drain", "retain", "sort_by", "iter_mut",
+  "into_iter", "enumerate", "zip", "filter_map", "flat_map", "fold", "any", "all", "position", "rev", "skip",
+  "step_by", "chain", "cloned", "copied", "last", "nth", "peekable", "write_str", "write_fmt", "store", "fetch_add",
+  "lock", "recv", "spawn", "as_ptr", "as_slice", "as_bytes", "to_vec", "with_capacity", "capacity", "from_str",
+  "from_utf8", "to_lowercase", "to_uppercase",
+]);
+
 export const rust: LanguageSpec = {
   id: "rust",
   grammar: "rust",
@@ -362,12 +460,14 @@ export const rust: LanguageSpec = {
   selfNames: new Set(["self", "Self"]),
   importsAreExports: false,
   ignoredNames: BUILTINS,
+  commonMembers: COMMON_MEMBERS,
   classify,
   outer,
   exported,
   signature,
   doc,
   isIdentUsage,
+  scanCalls,
   parseImport,
   resolveImport,
   resolveQualifier,

@@ -1,4 +1,4 @@
-import { search } from "../query/search.js";
+import { search, sentenceWords } from "../query/search.js";
 import { NODE_COLUMNS, rowToNode, type GraphStore } from "../store/store.js";
 import type { Confidence, EdgeKind, GraphNode } from "../types.js";
 import { SYMBOL_KINDS } from "./common.js";
@@ -25,6 +25,8 @@ export interface ContextResult {
   /** Seed ids that matched no node. */
   missingSeeds: string[];
   items: ContextItem[];
+  /** True when the starting points match only some words of the task: the result is a broad guess. */
+  weakStart: boolean;
 }
 
 /** How much relevance survives one hop, by relationship and direction. */
@@ -101,10 +103,15 @@ export function buildContext(
   };
 
   const missingSeeds: string[] = [];
+  /** Whether any starting point is better than a partial match on words. */
+  let strong = false;
+  let strongText = false;
   for (const id of options.seeds ?? []) {
     const node = lookup(id);
-    if (node) addSeed(node, 1);
-    else missingSeeds.push(id);
+    if (node) {
+      addSeed(node, 1);
+      strong = true;
+    } else missingSeeds.push(id);
   }
 
   if (options.task) {
@@ -113,6 +120,7 @@ export function buildContext(
       const exact = lookup(identifier);
       if (exact) {
         addSeed(exact, 1);
+        strong = true;
         continue;
       }
       const segments = identifier.split(/[.#:]+/).filter(Boolean);
@@ -124,16 +132,24 @@ export function buildContext(
         const narrowed = named.filter((n) => n.id.endsWith(`#${qualified}`) || n.id.endsWith(`.${qualified}`));
         if (narrowed.length > 0) named = narrowed;
       }
-      if (named.length <= 4) for (const node of named) addSeed(node, 0.9);
+      if (named.length <= 4) {
+        for (const node of named) addSeed(node, 0.9);
+        if (named.length > 0) strong = true;
+      }
     }
     if (words.length > 0) {
-      const { hits } = search(store, { query: words.join(" "), match: "any", limit: MAX_TEXT_SEEDS });
+      const query = words.join(" ");
+      const { hits } = search(store, { query, limit: MAX_TEXT_SEEDS });
+      const meaningful = sentenceWords(query);
       const top = hits[0]?.score ?? 0;
       for (const hit of hits) {
         if (top <= 0) break;
         // Squared, so a hit half as good as the best starts with much less than half its weight.
         const relative = Math.max(hit.score / top, 0);
-        addSeed(hit.node, 0.25 + 0.6 * relative * relative);
+        // And scaled by how much of the task it matches: one word of eight is little to go on.
+        const coverage = meaningful && hit.matched !== undefined ? hit.matched / meaningful.length : 1;
+        addSeed(hit.node, (0.25 + 0.6 * relative * relative) * (0.5 + 0.5 * coverage));
+        if (coverage >= 0.5) strongText = true;
       }
     }
   }
@@ -141,6 +157,7 @@ export function buildContext(
   for (const extra of options.extraSeeds ?? []) {
     const node = lookup(extra.id);
     if (node) addSeed(node, Math.min(Math.max(extra.weight, 0), 1));
+    if (node && extra.weight >= 0.5) strong = true;
   }
 
   const seeds = [...seedWeights.values()].sort((a, b) => b.weight - a.weight).slice(0, 10);
@@ -223,5 +240,10 @@ export function buildContext(
     .filter((entry) => entry.score >= floor || seedIds.has(entry.node.id))
     .slice(0, maxItems)
     .map((entry) => ({ node: entry.node, score: entry.score, seed: seedIds.has(entry.node.id) }));
-  return { seeds: seeds.map((s) => s.node), missingSeeds, items };
+  return {
+    seeds: seeds.map((s) => s.node),
+    missingSeeds,
+    items,
+    weakStart: seeds.length > 0 && !strong && !strongText,
+  };
 }

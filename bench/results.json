@@ -1,0 +1,150 @@
+{
+  "note": "Measurements behind the charts in the README. `npm run charts -- --measure` re-runs the token benchmark and rewrites `tokens`; the rest is edited by hand when it is measured again. All on Windows 11.",
+  "tokens": {
+    "measured": "2026-11-13",
+    "project": "Vertskim",
+    "files": 533,
+    "symbols": 1761,
+    "rows": [
+      {
+        "question": "Get oriented in the project",
+        "without": "list the files (first 400) and read the README",
+        "withGraph": "graph_overview",
+        "samples": 1,
+        "medianWithout": 14948,
+        "medianWith": 880,
+        "larger": 0
+      },
+      {
+        "question": "See what a file contains",
+        "without": "read the file",
+        "withGraph": "graph_node (outline)",
+        "samples": 40,
+        "medianWithout": 1564,
+        "medianWith": 327,
+        "larger": 8
+      },
+      {
+        "question": "Read one function or class",
+        "without": "read the file it is in",
+        "withGraph": "graph_node (source)",
+        "samples": 40,
+        "medianWithout": 3016,
+        "medianWith": 195,
+        "larger": 2
+      },
+      {
+        "question": "Find who uses a symbol",
+        "without": "search the project for its name (matching lines only, first 250)",
+        "withGraph": "graph_neighbors (in)",
+        "samples": 40,
+        "medianWithout": 215,
+        "medianWith": 64,
+        "larger": 3
+      },
+      {
+        "question": "Gather the code around a symbol",
+        "without": "read the file it is in, and search for its name elsewhere with 10 lines around each match",
+        "withGraph": "graph_context (source)",
+        "samples": 40,
+        "medianWithout": 5247,
+        "medianWith": 874,
+        "larger": 0
+      },
+      {
+        "question": "Check what a change would affect",
+        "without": "search for its name with 10 lines around each match, to see what the uses are",
+        "withGraph": "graph_impact",
+        "samples": 40,
+        "medianWithout": 2820,
+        "medianWith": 188,
+        "larger": 0
+      }
+    ]
+  },
+  "indexing": {
+    "note": "First index of a project, read-only. The eight outside projects were shallow-cloned and measured on 2026-11-12 (KNOWN_ISSUES.md, N5); Vertskim and three.js are medians of three runs on 2026-11-13.",
+    "rows": [
+      {
+        "project": "three.js",
+        "language": "JavaScript",
+        "files": 1269,
+        "seconds": 8.4
+      },
+      {
+        "project": "google/gson",
+        "language": "Java",
+        "files": 266,
+        "seconds": 2.8
+      },
+      {
+        "project": "google/leveldb",
+        "language": "C++, C",
+        "files": 133,
+        "seconds": 2.6
+      },
+      {
+        "project": "rack/rack",
+        "language": "Ruby",
+        "files": 95,
+        "seconds": 2.1
+      },
+      {
+        "project": "Vertskim",
+        "language": "TypeScript",
+        "files": 520,
+        "seconds": 1.7
+      },
+      {
+        "project": "jbogard/MediatR",
+        "language": "C#",
+        "files": 160,
+        "seconds": 1.5
+      },
+      {
+        "project": "DaveGamble/cJSON",
+        "language": "C",
+        "files": 53,
+        "seconds": 1.4
+      },
+      {
+        "project": "slimphp/Slim",
+        "language": "PHP",
+        "files": 125,
+        "seconds": 1.1
+      },
+      {
+        "project": "go-chi/chi",
+        "language": "Go",
+        "files": 90,
+        "seconds": 0.6
+      },
+      {
+        "project": "rust-lang/log",
+        "language": "Rust",
+        "files": 13,
+        "seconds": 0.4
+      }
+    ]
+  },
+  "accuracy": {
+    "note": "Relationships found from syntax alone, checked against a scip-typescript 0.6.2 index of this repository (`vertskim bench --scip`), measured on 2026-11-12.",
+    "rows": [
+      {
+        "label": "Calls the compiler knows of that syntax alone finds",
+        "part": 1548,
+        "whole": 1580
+      },
+      {
+        "label": "Calls linked through imports or types, confirmed",
+        "part": 1500,
+        "whole": 1500
+      },
+      {
+        "label": "Calls linked by name alone, confirmed",
+        "part": 49,
+        "whole": 50
+      }
+    ]
+  }
+}

@@ -17,6 +17,8 @@ export interface SearchOptions {
 
 export interface SearchHit {
   node: GraphNode;
+  /** How many of the query's meaningful words the node matches, when the query is a sentence. */
+  matched?: number;
   /** Relevance, highest first. Comparable only within one result. */
   score: number;
   /** Number of non-structural edges pointing at the node. */
@@ -36,6 +38,72 @@ export interface SearchResult {
   hits: SearchHit[];
   /** True when nothing matched every word and the hits match only some of them. */
   partial: boolean;
+}
+
+/** Words that say nothing about which code is meant, dropped from queries of three or more words. */
+const FUNCTION_WORDS = new Set(
+  (
+    "a an the and or but if then else when where while how what why which who whom whose this that these those " +
+    "it its is are was were be been being do does did has have had can could should would will may might must " +
+    "not no of in on at to for from by with without into onto over under about as so than too very just also " +
+    "only i we you they he she me my our your their us them there here all any each every some such same other"
+  ).split(" "),
+);
+
+/** Words every signature is made of, which say nothing about what the code does. */
+const KEYWORDS = new Set(
+  (
+    "function class interface type enum def async await export default const let var return public private " +
+    "protected static readonly abstract override void new this self cls fn func pub impl struct trait mod use " +
+    "package import from"
+  ).split(" "),
+);
+
+/**
+ * A rough English stem, so that "processes" finds "process" and "updating" finds
+ * "update". Prefix matching does the rest.
+ */
+export function stemWord(word: string): string {
+  const w = word.toLowerCase();
+  if (w.length <= 4) return w;
+  if (w.endsWith("ies") && w.length > 5) return `${w.slice(0, -3)}y`;
+  if (/(ss|ch|sh|x)es$/.test(w)) return w.slice(0, -2);
+  if (w.endsWith("ing") && w.length - 3 >= 4) return w.slice(0, -3);
+  if (w.endsWith("ed") && w.length - 2 >= 4) return w.slice(0, -2);
+  if (w.endsWith("s") && !w.endsWith("ss")) return w.slice(0, -1);
+  return w;
+}
+
+/**
+ * The words that matter in a query of three or more words, stemmed, or null for a
+ * shorter query, which is taken as a name and matched as written.
+ */
+export function sentenceWords(query: string): string[] | null {
+  const raw = query.match(/[\p{L}\p{N}_]+/gu) ?? [];
+  if (raw.length < 3) return null;
+  const meaningful = raw.filter((w) => !FUNCTION_WORDS.has(w.toLowerCase())).map(stemWord);
+  return meaningful.length > 0 ? [...new Set(meaningful)] : null;
+}
+
+/** The words of a node a query word can match: its name split up, its path, signature and doc. */
+function nodeWords(node: GraphNode): string[] {
+  const hash = node.id.indexOf("#");
+  const qname = hash < 0 ? node.name : node.id.slice(hash + 1);
+  const text = `${qname} ${node.path} ${node.signature ?? ""} ${node.doc ?? ""}`;
+  const out = new Set<string>();
+  for (const token of text.match(/[\p{L}\p{N}_]+/gu) ?? []) {
+    const lower = token.toLowerCase();
+    if (KEYWORDS.has(lower)) continue;
+    out.add(lower);
+    for (const part of splitIdentifier(token)) if (!KEYWORDS.has(part)) out.add(part);
+  }
+  return [...out];
+}
+
+/** How many of `words` (already stemmed) a node matches, by prefix as the full-text index does. */
+function countMatched(node: GraphNode, words: string[]): number {
+  const tokens = nodeWords(node);
+  return words.filter((word) => tokens.some((token) => token.startsWith(word))).length;
 }
 
 const N_COLUMNS = NODE_COLUMNS.split(", ")
@@ -196,7 +264,11 @@ export function search(store: GraphStore, options: SearchOptions): SearchResult 
     }
   }
 
-  const words = query.match(/[\p{L}\p{N}_]+/gu) ?? [];
+  const rawWords = query.match(/[\p{L}\p{N}_]+/gu) ?? [];
+  // A sentence rather than a name: its function words and word endings say nothing about the code.
+  const meaningful = sentenceWords(query);
+  const sentence = meaningful !== null;
+  const words: string[] = meaningful ?? rawWords;
   if (words.length > 0) {
     const runFts = (expr: string) => {
       const rows = store.db
@@ -237,6 +309,21 @@ export function search(store: GraphStore, options: SearchOptions): SearchResult 
     if (node.exported > 0) score += 1.5;
     if (isTestNode(node)) score -= 1.5;
     hits.push({ node, score, fanIn });
+  }
+  if (sentence) {
+    // A node that matches one word of a long sentence is a coincidence, not an answer.
+    const needed = words.length >= 4 ? Math.max(2, Math.ceil(words.length / 3)) : 1;
+    const kept: SearchHit[] = [];
+    for (const hit of hits) {
+      const matched = countMatched(hit.node, words);
+      if (partial && matched < needed) continue;
+      hit.matched = matched;
+      hit.score += 2 * (matched / words.length);
+      kept.push(hit);
+    }
+    hits.length = 0;
+    hits.push(...kept);
+    if (hits.length === 0) partial = false;
   }
   hits.sort((a, b) => b.score - a.score || a.node.id.localeCompare(b.node.id));
   return { hits: hits.slice(0, limit), partial };

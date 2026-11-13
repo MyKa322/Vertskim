@@ -13,7 +13,7 @@ after(removeTempDirs);
  * the relationships that only come out right if that language's scoping rules
  * are followed.
  */
-describe("Go, Rust, Java and C#", () => {
+describe("Go, Rust, Java, C#, C and C++, Ruby and PHP", () => {
   let root: string;
   let project: Project;
   const node = (id: string) => project.node(id);
@@ -41,6 +41,17 @@ describe("Go, Rust, Java and C#", () => {
     // Same file as its type: listed under it. Another file: listed under that file.
     assert.equal(node(`${cart}/cart.go#Cart.Add`)?.parent, `${cart}/cart.go#Cart`);
     assert.equal(node(`${cart}/total.go#Cart.sum`)?.parent, `${cart}/total.go`);
+    // Interfaces are satisfied without saying so: a guess from the method names and their shapes.
+    const implemented = (type: string, iface: string) => link(type, "implements", iface)?.confidence;
+    assert.equal(implemented(`${cart}/item.go#Item`, `${cart}/item.go#Pricer`), "heuristic");
+    assert.equal(implemented(`${cart}/item.go#Item`, `${cart}/labels.go#Labeled`), "heuristic"); // embeds Pricer
+    assert.equal(implemented(`${cart}/item.go#Item`, `${cart}/labels.go#Tagger`), undefined); // Label takes no prefix
+    assert.equal(implemented(`${cart}/cart.go#Cart`, `${cart}/item.go#Pricer`), undefined);
+    resolved(`${cart}/labels.go#Labeled`, "extends", `${cart}/item.go#Pricer`);
+    // The type's outline shows both.
+    const outline = project.details(node(`${cart}/cart.go#Cart`)!).outline.map((e) => e.node.id);
+    assert.ok(outline.includes(`${cart}/cart.go#Cart.Add`));
+    assert.ok(outline.includes(`${cart}/total.go#Cart.sum`));
 
     // No import between files of one package; the parameter's type says whose `sum` this is.
     resolved(`${cart}/total.go#Total`, "calls", `${cart}/total.go#Cart.sum`);
@@ -56,8 +67,8 @@ describe("Go, Rust, Java and C#", () => {
     resolved("go/cmd/shop/main.go#main", "calls", `${cart}/cart.go#New`);
     resolved("go/cmd/shop/main.go#main", "calls", `${cart}/total.go#Total`);
     resolved("go/cmd/shop/main.go#main", "calls", "go/internal/format/money.go#Money"); // imported under an alias
-    // `c := cart.New()` leaves the type of `c` unwritten: a guess, marked as one.
-    assert.equal(link("go/cmd/shop/main.go#main", "calls", `${cart}/cart.go#Cart.Add`)?.confidence, "heuristic");
+    // `c := cart.New()`: the type of `c` is what `func New() *Cart` returns.
+    resolved("go/cmd/shop/main.go#main", "calls", `${cart}/cart.go#Cart.Add`);
 
     // A test in the same package imports nothing, so its subjects come from what it uses.
     assert.equal(project.store.getFile(`${cart}/cart_test.go`)?.subkind, "test");
@@ -92,8 +103,93 @@ describe("Go, Rust, Java and C#", () => {
     resolved("rust/src/main.rs#main", "calls", `${account}#Account.deposit`); // `let mut account: Account`
     resolved("rust/src/report/mod.rs#summary", "calls", `${account}#Account.describe`); // `account: &Account`
     resolved("rust/src/report/mod.rs#summary", "calls", "rust/src/report/format.rs#line"); // `format::line`
-    // `use super::line` inside an inline `mod tests` means this file.
-    resolved("rust/src/report/format.rs#wraps", "references", "rust/src/report/format.rs#line");
+    // `use super::line` inside an inline `mod tests` means this file; `assert_eq!(line("a"), …)` calls it.
+    resolved("rust/src/report/format.rs#wraps", "calls", "rust/src/report/format.rs#line");
+    // Calls inside a macro's arguments are read from its tokens.
+    resolved("rust/src/main.rs#main", "calls", "rust/src/report/mod.rs#summary"); // println!("{}", summary(&account))
+    resolved("rust/src/main.rs#main", "calls", "rust/src/report/format.rs#line"); // report::format::line("done")
+    resolved(`${account}#Account.fmt`, "calls", `${account}#Account.describe`); // write!(f, "{}", self.describe())
+    // An `impl` block in another module of the crate: the method is in the type's outline.
+    const outline = project.details(node(`${account}#Account`)!).outline.map((e) => e.node.id);
+    assert.ok(outline.includes("rust/src/report/mod.rs#Account.report_line"));
+    assert.ok(outline.includes(`${account}#Account.deposit`));
+    assert.equal(link("rust/src/main.rs#main", "references", "rust/src/report/mod.rs#summary"), null);
+  });
+
+  test("C and C++: includes are transitive, and uses of a declaration reach its definition", () => {
+    const header = "cpp/include/shop/cart.hpp";
+    const item = "cpp/include/shop/item.hpp";
+    const source = "cpp/src/cart.cpp";
+    assert.equal(node(`${header}#Cart`)?.doc, "A basket of items.");
+    assert.equal(node(`${header}#Cart.add`)?.subkind, "declaration");
+    assert.equal(node(`${header}#Cart.add`)?.exported, 1);
+    assert.equal(node(`${header}#Cart.audit`)?.exported, 0); // under `private:`
+    assert.equal(node(`${item}#Item`)?.subkind, "struct");
+    assert.equal(node(`${source}#Cart.add`)?.kind, "method"); // `void Cart::add(...)`, written apart
+    assert.equal(node("cpp/src/legacy.c#units")?.exported, 0); // static
+    assert.equal(node("cpp/src/legacy.h#CENTS_PER_UNIT")?.subkind, "macro");
+    assert.equal(node("cpp/src/legacy.h#LEGACY_H"), null); // a header guard
+
+    // A quoted include is found beside the file or anywhere its path fits; <...> is a library.
+    assert.equal(link("cpp/src/main.cpp", "imports", header)?.confidence, "exact");
+    assert.ok(link(header, "imports", item));
+    assert.ok(link("cpp/src/main.cpp", "imports", "ext:c/std"));
+    resolved(`${header}#Cart`, "extends", `${item}#Priced`);
+    // `cart.add(...)` on `shop::Cart cart` reaches the definition in the source file, not the header.
+    resolved("cpp/src/main.cpp#main", "calls", `${source}#Cart.add`);
+    resolved("cpp/src/main.cpp#main", "calls", "cpp/src/legacy.c#log_total"); // C, declared in legacy.h
+    resolved(`${source}#Cart.add`, "calls", `${source}#Cart.audit`); // a bare call to its own member
+    // `with_tax` is declared in item.hpp, which cart.cpp reaches only through cart.hpp.
+    resolved(`${source}#Cart.total`, "calls", `${source}#with_tax`);
+    const outline = project.details(node(`${header}#Cart`)!).outline.map((e) => e.node.id);
+    assert.ok(outline.includes(`${source}#Cart.total`));
+  });
+
+  test("Ruby: constants are global, modules reopen, and bare names call methods", () => {
+    const cart = "ruby/lib/shop/cart.rb";
+    const item = "ruby/lib/shop/item.rb";
+    assert.equal(node(`${cart}#Shop.Cart`)?.doc, "A basket of items."); // the comment is parsed inside `module Shop`
+    assert.equal(node(`${cart}#Shop`)?.signature, "module Shop");
+    assert.equal(node(`${cart}#Shop.Cart.open`)?.subkind, "static"); // def self.open
+    assert.equal(node(`${cart}#Shop.Cart.audit`)?.exported, 0); // after a bare `private`
+    assert.equal(node(`${cart}#Shop.Cart.add`)?.exported, 1);
+    assert.equal(node("ruby/lib/shop/priced.rb#Shop.Priced")?.subkind, "module");
+
+    assert.equal(link("ruby/bin/shop.rb", "imports", "ruby/lib/shop.rb")?.confidence, "exact"); // require_relative
+    assert.ok(link("ruby/lib/shop.rb", "imports", "ext:gem/json"));
+    assert.ok(link("ruby/test/cart_test.rb", "tests", cart));
+    resolved(`${item}#Shop.Item`, "extends", "ruby/lib/shop/priced.rb#Shop.Priced"); // include Priced
+    resolved(`${cart}#Shop.Cart.add`, "calls", `${cart}#Shop.Cart.audit`); // `audit`, no parentheses
+    // `Shop::Cart.open` from a file that only requires lib/shop.rb.
+    resolved("ruby/bin/shop.rb", "calls", `${cart}#Shop.Cart.open`);
+    // `cart = Shop::Cart.new` types the variable.
+    resolved("ruby/test/cart_test.rb#CartTest.test_total", "calls", `${cart}#Shop.Cart.add`);
+    resolved("ruby/test/cart_test.rb#CartTest.test_total", "calls", `${item}#Shop.Item`); // Shop::Item.new
+    // A block parameter has no type: a guess, marked as one.
+    assert.equal(
+      link(`${cart}#Shop.Cart.total`, "calls", "ruby/lib/shop/priced.rb#Shop.Priced.with_tax")?.confidence,
+      "heuristic",
+    );
+  });
+
+  test("PHP: namespaces are in scope, use imports a class, typed properties settle calls", () => {
+    const cart = "php/src/Cart.php";
+    assert.equal(node(`${cart}#Cart`)?.doc, "A basket of items.");
+    assert.equal(node(`${cart}#Cart.audit`)?.exported, 0); // private
+    assert.equal(node(`${cart}#Cart.open`)?.subkind, "static");
+    assert.equal(node(`${cart}#Cart.__construct`)?.subkind, "constructor");
+    assert.equal(node("php/src/Priced.php#Priced")?.kind, "interface");
+    assert.equal(project.store.getFile(cart)?.package, "Acme\\Shop");
+
+    // `use Acme\Shop\Support\Tax;` finds the file declaring that namespace and named after the class.
+    assert.equal(link(cart, "imports", "php/src/Support/Tax.php")?.confidence, "exact");
+    assert.ok(link(cart, "imports", "ext:composer/psr"));
+    resolved("php/src/Item.php#Item", "implements", "php/src/Priced.php#Priced"); // same namespace, no `use`
+    resolved(`${cart}#Cart.add`, "calls", `${cart}#Cart.audit`); // $this->audit()
+    resolved(`${cart}#Cart.total`, "calls", "php/src/Support/Tax.php#Tax.apply"); // through `private Tax $tax`
+    resolved(`${cart}#Cart.__construct`, "calls", "php/src/Support/Tax.php#Tax"); // new Tax()
+    resolved("php/bin/shop.php", "calls", `${cart}#Cart.open`); // Cart::open()
+    resolved("php/bin/shop.php", "calls", "php/bin/shop.php#format_total");
   });
 
   test("Java: the package is in scope, declared types settle calls, super and this work", () => {
@@ -115,8 +211,16 @@ describe("Go, Rust, Java and C#", () => {
     resolved(`${billing}/Invoice.java#Invoice.total`, "calls", `${billing}/Line.java#Line.amount`);
     // `lines.add(...)` is on a java.util.List, which is not ours: no edge to Invoice.add.
     assert.equal(link(`${billing}/Invoice.java#Invoice.add`, "calls", `${billing}/Invoice.java#Invoice.add`), null);
-    resolved(`${billing}/RecurringInvoice.java#RecurringInvoice.yearly`, "calls", `${billing}/Invoice.java#Invoice.total`); // super.total()
-    resolved(`${billing}/RecurringInvoice.java#RecurringInvoice.isEmpty`, "calls", `${billing}/Invoice.java#Invoice.count`); // this.count(), inherited
+    resolved(
+      `${billing}/RecurringInvoice.java#RecurringInvoice.yearly`,
+      "calls",
+      `${billing}/Invoice.java#Invoice.total`,
+    ); // super.total()
+    resolved(
+      `${billing}/RecurringInvoice.java#RecurringInvoice.isEmpty`,
+      "calls",
+      `${billing}/Invoice.java#Invoice.count`,
+    ); // this.count(), inherited
 
     assert.ok(link(`${billing}/Invoice.java`, "imports", money));
     assert.ok(link(`${billing}/Invoice.java`, "imports", "ext:jvm/java.util"));
@@ -144,6 +248,9 @@ describe("Go, Rust, Java and C#", () => {
     assert.equal(project.store.getFile(stock)?.package, "Acme.Inventory");
 
     resolved(`${stock}#Stock`, "implements", `${istock}#IStock`);
+    // What the base turns out to be decides, not the I in its name.
+    resolved(`${stock}#Stock`, "implements", `${istock}#Audited`);
+    assert.equal(link(`${stock}#Stock`, "extends", `${istock}#Audited`), null);
     resolved(`${stock}#Stock.Add`, "calls", `${stock}#Stock.Log`); // bare call
     resolved(`${stock}#Stock.Value`, "calls", `${prices}#PriceList.For`); // through `using Acme.Pricing`
     resolved(`${stock}#Stock.Add`, "references", `${istock}#Item`); // same namespace, other file
@@ -158,12 +265,13 @@ describe("Go, Rust, Java and C#", () => {
   });
 
   test("languages keep to themselves", () => {
-    // Every call edge joins two symbols of the same language.
+    // Every call edge joins two symbols of the same language, C and C++ counting as one: they share headers.
     const rows = project.store.db
       .prepare(
         `SELECT a.language AS src, b.language AS dst FROM edges e
          JOIN nodes a ON a.id = e.src JOIN nodes b ON b.id = e.dst
-         WHERE e.kind = 'calls' AND a.language != b.language`,
+         WHERE e.kind = 'calls' AND a.language != b.language
+           AND NOT (a.language IN ('c', 'cpp') AND b.language IN ('c', 'cpp'))`,
       )
       .all();
     assert.deepEqual(rows, []);
@@ -175,7 +283,12 @@ describe("Go, Rust, Java and C#", () => {
     const cart = "go/internal/cart";
     write(root, `${cart}/discount.go`, "package cart\n\nfunc discount(cents int) int {\n\treturn cents / 10\n}\n", 1);
     const total = readFileSync(join(root, `${cart}/total.go`), "utf8");
-    write(root, `${cart}/total.go`, total.replace("return applyTax(c.sum())", "return applyTax(c.sum() - discount(c.sum()))"), 1);
+    write(
+      root,
+      `${cart}/total.go`,
+      total.replace("return applyTax(c.sum())", "return applyTax(c.sum() - discount(c.sum()))"),
+      1,
+    );
     const added = await project.sync();
     assert.ok(added.resolvedFiles < 12, `re-linked ${added.resolvedFiles} files`);
     resolved(`${cart}/total.go#Total`, "calls", `${cart}/discount.go#discount`);

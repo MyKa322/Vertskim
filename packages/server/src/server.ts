@@ -158,6 +158,19 @@ export async function startUiServer(project: Project, options: UiServerOptions =
         return sendJson(res, 200, project.view({ root, expanded: stringList(body.expanded, "expanded"), maxNodes }));
       }
 
+      case "GET /api/tree": {
+        await project.refresh([], 3000);
+        // Paths only: the page builds the folders of its explorer from them.
+        const files = [...project.store.allFiles().values()].map((file) => ({
+          path: file.path,
+          language: file.language,
+          subkind: file.subkind,
+          lines: file.lines,
+          syntaxError: file.syntaxError ?? null,
+        }));
+        return sendJson(res, 200, { version: project.graphVersion(), files });
+      }
+
       case "GET /api/node": {
         const id = url.searchParams.get("id") ?? "";
         await project.refresh(id ? [id] : [], 3000);
@@ -215,11 +228,12 @@ export async function startUiServer(project: Project, options: UiServerOptions =
 
       case "GET /api/search": {
         const query = url.searchParams.get("q") ?? "";
-        const limit = Number(url.searchParams.get("limit") ?? 12);
-        const result = project.search({ query, limit: Number.isFinite(limit) ? limit : 12 });
+        const asked = Number(url.searchParams.get("limit") ?? 12);
+        const limit = Number.isFinite(asked) ? Math.min(Math.max(Math.trunc(asked), 1), 100) : 12;
+        const result = await project.searchWithMeaning({ query, limit });
         return sendJson(res, 200, {
           partial: result.partial,
-          hits: result.hits.map((hit) => ({ node: hit.node, fanIn: hit.fanIn })),
+          hits: result.hits.map((hit) => ({ node: hit.node, fanIn: hit.fanIn, byMeaning: hit.byMeaning === true })),
         });
       }
 
@@ -235,7 +249,9 @@ export async function startUiServer(project: Project, options: UiServerOptions =
           Connection: "keep-alive",
           "X-Accel-Buffering": "no",
         });
-        res.write(`retry: 1500\nevent: hello\ndata: ${JSON.stringify({ status: statusPayload(), trail: recentTrail })}\n\n`);
+        res.write(
+          `retry: 1500\nevent: hello\ndata: ${JSON.stringify({ status: statusPayload(), trail: recentTrail })}\n\n`,
+        );
         clients.add(res);
         req.on("close", () => clients.delete(res));
         return;
@@ -286,7 +302,7 @@ export async function startUiServer(project: Project, options: UiServerOptions =
       const url = new URL(req.url ?? "/", origin);
       if (!url.pathname.startsWith("/api/")) {
         if (req.method !== "GET" && req.method !== "HEAD") throw new HttpError(405, "method not allowed");
-        return serveStatic(res, assetsDir, url.pathname);
+        return serveStatic(res, assetsDir, url.pathname, req.headers["accept-encoding"]);
       }
       // A page on another site may not use the API even if it somehow learned the token.
       const from = req.headers.origin;

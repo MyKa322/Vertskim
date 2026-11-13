@@ -13,6 +13,9 @@ CREATE TABLE IF NOT EXISTS vectors (
 );
 `;
 
+/** Layout of vectors.db. Unlike notes, vectors can be remade, so an unknown layout is replaced. */
+const VECTORS_VERSION = 1;
+
 export interface VectorRow {
   id: string;
   textHash: string;
@@ -44,7 +47,13 @@ export class VectorStore {
     const db = new DatabaseSync(this.path);
     db.exec("PRAGMA journal_mode = WAL");
     db.exec("PRAGMA busy_timeout = 5000");
+    const version = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
+    if (version > VECTORS_VERSION) {
+      // Made by a newer version: vectors can always be made again, so start over in this layout.
+      db.exec("DROP TABLE IF EXISTS vectors; DROP TABLE IF EXISTS meta;");
+    }
     db.exec(SCHEMA);
+    db.exec(`PRAGMA user_version = ${VECTORS_VERSION}`);
     this.db = db;
     return db;
   }
@@ -59,6 +68,18 @@ export class VectorStore {
   model(): string | null {
     const row = this.open(false)?.prepare("SELECT value FROM meta WHERE key = 'model'").get();
     return row ? (row.value as string) : null;
+  }
+
+  /** Which version of the text recipe the stored vectors were made with. */
+  textVersion(): number {
+    const row = this.open(false)?.prepare("SELECT value FROM meta WHERE key = 'text_version'").get();
+    return row ? Number(row.value) : 0;
+  }
+
+  setTextVersion(version: number): void {
+    this.open(true)!
+      .prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('text_version', ?)")
+      .run(String(version));
   }
 
   /** Start over for a different model: its vectors cannot be compared with the old ones. */
@@ -102,7 +123,9 @@ export class VectorStore {
   put(rows: VectorRow[]): void {
     if (rows.length === 0) return;
     const db = this.open(true)!;
-    const insert = db.prepare("INSERT OR REPLACE INTO vectors (node_id, text_hash, file_hash, vector) VALUES (?, ?, ?, ?)");
+    const insert = db.prepare(
+      "INSERT OR REPLACE INTO vectors (node_id, text_hash, file_hash, vector) VALUES (?, ?, ?, ?)",
+    );
     db.exec("BEGIN");
     try {
       for (const row of rows) {

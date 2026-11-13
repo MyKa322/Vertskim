@@ -3,7 +3,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { GraphStore } from "../store/store.js";
 import type { EdgeKind, GraphNode, ScipFact } from "../types.js";
-import { posixJoin, toPosix } from "../util.js";
+import { decodeText, posixJoin, toPosix } from "../util.js";
 import {
   ENCODING_UTF32,
   ENCODING_UTF8,
@@ -31,6 +31,11 @@ export interface ScipSourceStatus {
   facts: number;
   /** Files whose edges currently come from the index: imported and unchanged since. */
   filesInUse: number;
+  /**
+   * False for an `index.scip` found at the project root that nobody has asked to use.
+   * A repository can ship one, so it is not trusted until `vertskim scip` is run on it.
+   */
+  inUse: boolean;
 }
 
 /** Name of the index file every SCIP indexer writes by default. */
@@ -51,7 +56,9 @@ const DECLARATION = /[#.]$/;
 const DECLARATION_FILE = /\.d\.[cm]?ts`\/$/;
 
 /** The parts of a symbol that say which package it is in, which file, and what in that file. */
-function splitSymbol(symbol: string): { pkg: string; dirs: string[]; stem: string; tail: string; declaration: boolean } | null {
+function splitSymbol(
+  symbol: string,
+): { pkg: string; dirs: string[]; stem: string; tail: string; declaration: boolean } | null {
   const parts = symbol.split(" ");
   if (parts.length < 5) return null;
   const descriptors = parts.slice(4).join(" ");
@@ -65,7 +72,10 @@ function splitSymbol(symbol: string): { pkg: string; dirs: string[]; stem: strin
   }
   if (cut < 0) return null;
   const namespace = descriptors.slice(0, cut + 1);
-  const segments = namespace.split("/").filter(Boolean).map((s) => s.replace(/^`|`$/g, ""));
+  const segments = namespace
+    .split("/")
+    .filter(Boolean)
+    .map((s) => s.replace(/^`|`$/g, ""));
   const file = segments.pop() ?? "";
   return {
     pkg: `${parts[1]} ${parts[2]}`,
@@ -82,6 +92,11 @@ function commonSuffix(a: string[], b: string[]): number {
   return n;
 }
 const CONSTRUCTOR_NAMES = new Set(["constructor", "__init__", "__new__", "new"]);
+
+/** Local symbols (`local 12`) are numbered per document, so they are told apart by the file they are in. */
+function localKey(path: string, symbol: string): string {
+  return `${path}\u0000${symbol}`;
+}
 
 /** What a symbol of the index stands for in the graph. */
 interface Target {
@@ -101,7 +116,7 @@ function sameOrInside(root: string, path: string): string | null {
 /** Position of an offset in a line as a JavaScript string index. */
 function toIndex(line: string, offset: number, encoding: number): number {
   if (encoding === ENCODING_UTF8) {
-    // eslint-disable-next-line no-control-regex
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: a line of plain ASCII needs no conversion
     if (/^[\x00-\x7f]*$/.test(line)) return offset;
     return Buffer.from(line, "utf8").subarray(0, offset).toString("utf8").length;
   }
@@ -130,11 +145,13 @@ function importLines(lines: string[], starts: number[]): Set<number> {
 }
 
 class FileView {
+  readonly source: string;
   readonly lines: string[];
   /** Symbols of the file, smallest first, so the first one containing a line is the innermost. */
   readonly nodes: GraphNode[];
 
   constructor(text: string, nodes: GraphNode[]) {
+    this.source = text;
     this.lines = text.split(/\r?\n/);
     this.nodes = nodes
       .filter((n) => n.startLine && n.endLine)
@@ -154,6 +171,14 @@ class FileView {
     const rest = line.slice(toIndex(line, occurrence.end, encoding));
     // `name(`, `name<T>(`, `name::<T>(`, the optional call `name?.(`, and a macro `name!(`.
     return /^\s*(?:\?\.)?\s*(?:(?:::)?<[^<>(){};]*>\s*)?\(/.test(rest) || /^!\s*[([{]/.test(rest);
+  }
+
+  /** The name the member is called on, `queue` in `queue.unregister()`, or "" when it is not a plain name. */
+  receiver(occurrence: ScipOccurrence, encoding: number): string {
+    const line = this.lines[occurrence.line];
+    if (line === undefined) return "";
+    const before = line.slice(0, toIndex(line, occurrence.start, encoding));
+    return /([\p{L}\p{N}_$]+)\s*(?:\?\.|\.|::|->)\s*$/u.exec(before)?.[1] ?? "";
   }
 
   /** True when the occurrence is the member in `value.member`, as opposed to a name standing alone. */
@@ -229,7 +254,7 @@ export class ScipIndexes {
   }
 
   private save(sources: string[]): void {
-    writeFileSync(this.configPath, `${JSON.stringify({ sources }, null, 2)}\n`);
+    writeFileSync(this.configPath, `${JSON.stringify({ version: 1, sources }, null, 2)}\n`);
   }
 
   /** Use this index file from now on. */
@@ -252,11 +277,18 @@ export class ScipIndexes {
     return true;
   }
 
-  /** Every index file in use: the project's own `index.scip` when there is one, plus those added by hand. */
+  /**
+   * Every index file in use: those added with `vertskim scip <file>`. An `index.scip` at the
+   * project root is among them only once it has been added that way.
+   */
   sources(): string[] {
-    const out = new Set(this.listed());
-    out.add(join(this.root, DEFAULT_NAME));
-    return [...out];
+    return this.listed();
+  }
+
+  /** An `index.scip` at the project root that is not in use, if there is one. */
+  private unlistedDefault(): string | null {
+    const path = join(this.root, DEFAULT_NAME);
+    return !this.listed().includes(path) && this.stat(path) !== null ? path : null;
   }
 
   private stat(path: string): { size: number; mtimeMs: number } | null {
@@ -336,7 +368,9 @@ export class ScipIndexes {
   private import(indexPath: string, stat: { size: number; mtimeMs: number }): string[] {
     if (stat.size > MAX_INDEX_BYTES) throw new Error("larger than 512 MB");
     const data = readFileSync(indexPath);
-    const views = new Map<string, FileView | null>();
+    // Each pass reads a document's file once and lets it go: a large index would otherwise
+    // hold the text of every file it describes at the same time.
+    let current: { path: string; view: FileView | null } | null = null;
     const symbolNode = new Map<string, Target>();
     const byId = (id: string) => this.store.getNode(id);
     const outOfStep = new Set<string>();
@@ -348,18 +382,16 @@ export class ScipIndexes {
     const pathOf = (doc: ScipDocument): string | null =>
       base === null ? null : posixJoin(base, toPosix(doc.relativePath));
     const view = (path: string): FileView | null => {
-      let v = views.get(path);
-      if (v === undefined) {
-        v = null;
-        if (this.store.getFile(path)) {
-          try {
-            v = new FileView(readFileSync(join(this.root, path), "utf8"), this.store.nodesInFile(path));
-          } catch {
-            // unreadable: treated as not part of the project
-          }
+      if (current?.path === path) return current.view;
+      let v: FileView | null = null;
+      if (this.store.getFile(path)) {
+        try {
+          v = new FileView(decodeText(readFileSync(join(this.root, path))), this.store.nodesInFile(path));
+        } catch {
+          // unreadable: treated as not part of the project
         }
-        views.set(path, v);
       }
+      current = { path, view: v };
       return v;
     };
 
@@ -379,7 +411,17 @@ export class ScipIndexes {
       let checkable = 0;
       let agree = 0;
       for (const occurrence of doc.occurrences) {
-        if ((occurrence.roles & ROLE_DEFINITION) === 0 || occurrence.symbol.startsWith("local ")) continue;
+        if ((occurrence.roles & ROLE_DEFINITION) === 0) continue;
+        if (occurrence.symbol.startsWith("local ")) {
+          // A function defined inside another has a symbol of its own document only: `local 12`.
+          const text = file.text(occurrence, doc.positionEncoding);
+          const target = text !== null && IDENTIFIER.test(text) ? file.target(occurrence.line, text, byId) : null;
+          if (target && !target.viaType) {
+            symbolNode.set(localKey(path, occurrence.symbol), target);
+            found.push(localKey(path, occurrence.symbol));
+          }
+          continue;
+        }
         declared.push(occurrence.symbol);
         if (!DECLARATION.test(occurrence.symbol)) continue;
         const text = file.text(occurrence, doc.positionEncoding);
@@ -395,7 +437,18 @@ export class ScipIndexes {
           found.push(occurrence.symbol);
         }
       }
-      if (checkable >= 3 && agree / checkable < AGREEMENT) {
+      // An index that carries the text it was made from can be checked exactly. Otherwise a file
+      // modified after the index was written has to agree completely, and any other one mostly.
+      const record = this.store.getFile(path);
+      const changedSince = record !== null && record.mtimeMs > stat.mtimeMs + 2000;
+      const textDiffers =
+        doc.text !== undefined &&
+        doc.text !== "" &&
+        doc.text.replace(/\r\n/g, "\n") !== file.source.replace(/\r\n/g, "\n");
+      const disagrees = changedSince
+        ? checkable > 0 && agree < checkable
+        : checkable >= 3 && agree / checkable < AGREEMENT;
+      if (textDiffers || disagrees) {
         outOfStep.add(path);
         for (const symbol of found) symbolNode.delete(symbol);
         for (const symbol of declared) unknown.add(symbol);
@@ -478,7 +531,9 @@ export class ScipIndexes {
         if (skip.has(occurrence.line) || unknown.has(occurrence.symbol)) continue;
         const text = file.text(occurrence, doc.positionEncoding);
         if (text === null) continue;
-        const target = symbolNode.get(occurrence.symbol) ?? alias(occurrence.symbol);
+        const target = occurrence.symbol.startsWith("local ")
+          ? (symbolNode.get(localKey(path, occurrence.symbol)) ?? null)
+          : (symbolNode.get(occurrence.symbol) ?? alias(occurrence.symbol));
         if (target === "unknown") continue;
         // The file may have changed in ways the definitions do not show: only a use
         // that still reads as the symbol's name is taken from the index.
@@ -486,7 +541,9 @@ export class ScipIndexes {
         if (expected !== null && IDENTIFIER.test(expected) && expected !== text) continue;
         const src = file.innermost(occurrence.line)?.id ?? path;
         if (nodeNames.has(text)) {
-          settled.add(`${src}\u0000${text}\u0000${file.isMember(occurrence, doc.positionEncoding) ? 1 : 0}`);
+          const member = file.isMember(occurrence, doc.positionEncoding);
+          const receiver = member ? file.receiver(occurrence, doc.positionEncoding) : "";
+          settled.add(`${src}\u0000${text}\u0000${member ? 1 : 0}\u0000${receiver}`);
         }
         // A library's method, a parameter, a local: nothing the graph has a node for.
         if (!target) continue;
@@ -515,13 +572,7 @@ export class ScipIndexes {
           add(from.id, declaredBy?.kind === "interface" ? "implements" : "extends", to.id, from.startLine ?? 1);
         }
       }
-      this.store.replaceScipFile(
-        path,
-        indexPath,
-        record.hash,
-        [...facts.values()],
-        [...settled],
-      );
+      this.store.replaceScipFile(path, indexPath, record.hash, [...facts.values()], [...settled]);
       seen.add(path);
       totalFacts += facts.size;
     });
@@ -550,8 +601,6 @@ export class ScipIndexes {
     for (const path of new Set([...this.sources(), ...known.keys()])) {
       const row = known.get(path);
       const present = this.stat(path) !== null;
-      // The default location is only worth reporting when something is there.
-      if (!row && !present && !this.listed().includes(path)) continue;
       out.push({
         path,
         present,
@@ -562,6 +611,22 @@ export class ScipIndexes {
         outOfStep: row?.outOfStep ?? 0,
         facts: row?.facts ?? 0,
         filesInUse: this.store.scipFilesInUse(path),
+        inUse: true,
+      });
+    }
+    const found = this.unlistedDefault();
+    if (found) {
+      out.push({
+        path: found,
+        present: true,
+        tool: "",
+        importedAt: null,
+        documents: 0,
+        matched: 0,
+        outOfStep: 0,
+        facts: 0,
+        filesInUse: 0,
+        inUse: false,
       });
     }
     return out;

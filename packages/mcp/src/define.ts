@@ -1,4 +1,4 @@
-import type { Project } from "@vertskim/core";
+import { stripControl, type Project } from "@vertskim/core";
 import { z } from "zod";
 
 /** What the surrounding server offers a tool beyond the project itself. All of it is optional. */
@@ -50,7 +50,8 @@ export function defineTool<S extends z.ZodRawShape>(def: {
         const problems = parsed.error.issues.map((i) => `${i.path.join(".") || "arguments"}: ${i.message}`);
         throw new Error(`invalid arguments (${problems.join("; ")})`);
       }
-      return def.run(project, parsed.data as z.infer<z.ZodObject<S>>, context);
+      const reply = def.run(project, parsed.data as z.infer<z.ZodObject<S>>, context);
+      return typeof reply === "string" ? stripControl(reply) : reply.then(stripControl);
     },
   };
 }

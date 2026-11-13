@@ -4,13 +4,18 @@ import { EMPTY_EXTRACTION, extractFile, isParseable, MAX_PARSE_BYTES } from "./e
 import { Resolver } from "./resolve/resolver.js";
 import type { GraphStore } from "./store/store.js";
 import type { Extraction, FileRecord, SyncResult } from "./types.js";
-import { countLines, posixBasename, posixDirname, sha1, toPosix, yieldToEventLoop } from "./util.js";
+import { countLines, decodeText, posixBasename, posixDirname, sha1, toPosix, yieldToEventLoop } from "./util.js";
 
 /** Above this many affected files it is cheaper to re-resolve everything. */
 const FULL_RESOLVE_THRESHOLD = 500;
 const FILES_PER_TICK = 16;
 /** Files that say how imports map to directories; a change to one re-links the whole project. */
-const MANIFESTS = new Set(["package.json", "go.mod", "Cargo.toml"]);
+const MANIFESTS = new Set(["package.json", "go.mod", "Cargo.toml", "composer.json"]);
+
+function isManifest(path: string): boolean {
+  const name = posixBasename(path);
+  return MANIFESTS.has(name) || /^[jt]sconfig(\..+)?\.json$/.test(name);
+}
 
 export interface IndexProgress {
   state: "idle" | "indexing";
@@ -26,9 +31,7 @@ export interface SyncOptions {
 function normalizePaths(paths: string[]): string[] {
   const clean = new Set<string>();
   for (const raw of paths) {
-    const path = toPosix(raw)
-      .replace(/^\.\//, "")
-      .replace(/\/+$/, "");
+    const path = toPosix(raw).replace(/^\.\//, "").replace(/\/+$/, "");
     // Only paths inside the project are ever examined.
     if (path.startsWith("/") || /^[A-Za-z]:/.test(path) || path.split("/").includes("..")) continue;
     clean.add(path === "." ? "" : path);
@@ -134,71 +137,89 @@ export class Indexer {
       const changedPaths: string[] = [];
       for (const path of removed) {
         noteOldState(path);
-        if (MANIFESTS.has(posixBasename(path))) resolveAll = true;
+        if (isManifest(path)) resolveAll = true;
         this.store.removeFile(path);
         changedPaths.push(path);
       }
 
       const queue = [...added, ...modified];
       const addedPaths = new Set(added.map((f) => f.path));
-      for (let i = 0; i < queue.length; i++) {
-        const file = queue[i]!;
-        const before = known.get(file.path);
-        const parse = isParseable(file.language) && file.size <= MAX_PARSE_BYTES;
-        let hash = `${file.size}:${file.mtimeMs}`;
-        let extraction: Extraction = EMPTY_EXTRACTION;
-        let lines = 0;
+      for (let start = 0; start < queue.length; start += FILES_PER_TICK) {
+        await this.store.batch(async () => {
+          for (let i = start; i < Math.min(start + FILES_PER_TICK, queue.length); i++) {
+            const file = queue[i]!;
+            const before = known.get(file.path);
+            const parse = isParseable(file.language) && file.size <= MAX_PARSE_BYTES;
+            let hash = `${file.size}:${file.mtimeMs}`;
+            let extraction: Extraction = EMPTY_EXTRACTION;
+            let lines = 0;
 
-        if (parse) {
-          let text: string;
-          try {
-            text = await readFile(file.abs, "utf8");
-          } catch {
-            continue; // vanished or unreadable since the walk
-          }
-          hash = sha1(text);
-          if (before && before.hash === hash) {
-            this.store.touchFile(file.path, file.size, file.mtimeMs);
-            continue;
-          }
-          lines = countLines(text);
-          try {
-            extraction = await extractFile(file.path, file.language, text);
-          } catch (err) {
-            this.log(`extract failed for ${file.path}: ${(err as Error).message}`);
-          }
-        }
+            if (parse) {
+              let text: string;
+              try {
+                text = decodeText(await readFile(file.abs));
+              } catch {
+                continue; // vanished or unreadable since the walk
+              }
+              hash = sha1(text);
+              if (before && before.hash === hash) {
+                this.store.touchFile(file.path, file.size, file.mtimeMs);
+                continue;
+              }
+              lines = countLines(text);
+              try {
+                extraction = await extractFile(file.path, file.language, text);
+              } catch (err) {
+                this.log(`extract failed for ${file.path}: ${(err as Error).message}`);
+              }
+            }
 
-        if (before) noteOldState(file.path);
-        this.store.replaceFile(
-          {
-            path: file.path,
-            hash,
-            size: file.size,
-            mtimeMs: file.mtimeMs,
-            language: file.language,
-            subkind: file.subkind,
-            lines,
-          },
-          extraction,
-        );
-        for (const node of extraction.nodes) names.add(node.name);
-        affected.add(file.path);
-        changedPaths.push(file.path);
-        if (MANIFESTS.has(posixBasename(file.path))) resolveAll = true;
-        if (addedPaths.has(file.path)) {
-          result.added++;
-          if (!resolveAll) {
-            for (const other of this.filesPossiblyReferencing(file.path)) affected.add(other);
+            // An edit in progress often leaves a file that does not parse, and the parser then sees
+            // far less of it. Until it parses again, the symbols of the last version that did are kept.
+            // A file that never parsed cleanly (C full of macros, syntax newer than the grammar) is
+            // just read again: its errors are not an edit in progress.
+            const storedIsClean = before && (before.syntaxError == null || before.keptSymbols);
+            if (
+              storedIsClean &&
+              extraction.syntaxError &&
+              extraction.nodes.length < this.store.symbolCount(file.path)
+            ) {
+              this.store.keepSymbols(
+                { ...before, hash, size: file.size, mtimeMs: file.mtimeMs, lines },
+                extraction.syntaxError,
+              );
+              result.changed++;
+              continue;
+            }
+            if (before) noteOldState(file.path);
+            this.store.replaceFile(
+              {
+                path: file.path,
+                hash,
+                size: file.size,
+                mtimeMs: file.mtimeMs,
+                language: file.language,
+                subkind: file.subkind,
+                lines,
+              },
+              extraction,
+            );
+            for (const node of extraction.nodes) names.add(node.name);
+            affected.add(file.path);
+            changedPaths.push(file.path);
+            if (isManifest(file.path)) resolveAll = true;
+            if (addedPaths.has(file.path)) {
+              result.added++;
+              if (!resolveAll) {
+                for (const other of this.filesPossiblyReferencing(file.path)) affected.add(other);
+              }
+            } else {
+              result.changed++;
+            }
           }
-        } else {
-          result.changed++;
-        }
-
-        if (i % FILES_PER_TICK === FILES_PER_TICK - 1) {
-          this.progress.progress = (0.7 * (i + 1)) / queue.length;
-          await yieldToEventLoop();
-        }
+        });
+        this.progress.progress = (0.7 * Math.min(start + FILES_PER_TICK, queue.length)) / queue.length;
+        await yieldToEventLoop();
       }
       this.progress.progress = 0.7;
 
@@ -240,8 +261,7 @@ export class Indexer {
   private propagateThroughBarrels(changed: string[], affected: Set<string>): void {
     const importers = this.store.stmt("SELECT DISTINCT src FROM edges WHERE dst = ? AND kind = 'imports'");
     const reexports = this.store.stmt("SELECT 1 FROM imports WHERE origin_file = ? AND reexport = 1 LIMIT 1");
-    const isBarrel = (path: string) =>
-      posixBasename(path) === "__init__.py" || reexports.get(path) !== undefined;
+    const isBarrel = (path: string) => posixBasename(path) === "__init__.py" || reexports.get(path) !== undefined;
     const queue = [...changed];
     const seen = new Set(queue);
     for (let i = 0; i < queue.length && affected.size <= FULL_RESOLVE_THRESHOLD; i++) {

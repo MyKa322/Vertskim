@@ -1,7 +1,16 @@
 import type { Node } from "@vscode/tree-sitter-wasm";
 import type { Exported, ImportDecl, ImportName } from "../../types.js";
 import { posixDirname, posixJoin, tidySignature, truncate } from "../../util.js";
-import type { DefDecision, DocInfo, LanguageSpec, RawDef, ResolveContext, ResolvedImport, SymbolInfo } from "../spec.js";
+import {
+  MIN_NESTED_LINES,
+  type DefDecision,
+  type DocInfo,
+  type LanguageSpec,
+  type RawDef,
+  type ResolveContext,
+  type ResolvedImport,
+  type SymbolInfo,
+} from "../spec.js";
 
 const QUERY = `
 (function_definition name: (identifier) @name) @def.function
@@ -17,6 +26,25 @@ const QUERY = `
 
 (import_statement) @import
 (import_from_statement) @import
+
+(typed_parameter (identifier) @var type: (type (identifier) @vartype))
+(typed_default_parameter name: (identifier) @var type: (type (identifier) @vartype))
+(typed_parameter (identifier) @var type: (type (generic_type (identifier) @vartype)) (#not-eq? @vartype "Optional"))
+(typed_default_parameter name: (identifier) @var type: (type (generic_type (identifier) @vartype)) (#not-eq? @vartype "Optional"))
+(typed_parameter (identifier) @var
+  type: (type (generic_type (identifier) @_optional (type_parameter (type (identifier) @vartype))))
+  (#eq? @_optional "Optional"))
+(typed_default_parameter name: (identifier) @var
+  type: (type (generic_type (identifier) @_optional (type_parameter (type (identifier) @vartype))))
+  (#eq? @_optional "Optional"))
+(assignment left: (identifier) @var type: (type (identifier) @vartype))
+(assignment left: (attribute object: (identifier) @_self attribute: (identifier) @fieldvar) type: (type (identifier) @vartype)
+  (#eq? @_self "self"))
+(assignment left: (identifier) @var right: (call function: [(identifier) (attribute)] @varcall))
+(assignment left: (attribute object: (identifier) @_self attribute: (identifier) @fieldvar) right: [(identifier) (attribute)] @varvalue
+  (#eq? @_self "self"))
+(assignment left: (attribute object: (identifier) @_self attribute: (identifier) @fieldvar) right: (call function: [(identifier) (attribute)] @varcall)
+  (#eq? @_self "self"))
 `;
 
 function fieldIs(parent: Node, field: string, node: Node): boolean {
@@ -25,9 +53,15 @@ function fieldIs(parent: Node, field: string, node: Node): boolean {
 
 function classify(def: RawDef, parent: SymbolInfo | null): DefDecision | null {
   switch (def.kind) {
-    case "function":
+    case "function": {
       if (!parent) return { kind: "function" };
-      return parent.kind === "class" ? { kind: "method" } : null;
+      if (parent.kind === "class") return { kind: "method" };
+      // A function defined inside another (a decorator's wrapper, a callback), when it is more than a line or two.
+      const lines = def.node.endPosition.row - def.node.startPosition.row + 1;
+      return (parent.kind === "function" || parent.kind === "method") && lines >= MIN_NESTED_LINES
+        ? { kind: "function" }
+        : null;
+    }
     case "class":
       return !parent || parent.kind === "class" ? { kind: "class" } : null;
     case "variable":
@@ -62,9 +96,9 @@ function signature(def: RawDef, _outer: Node, source: string): string | null {
 function doc(def: RawDef, _outer: Node, _source: string): DocInfo {
   const body = def.node.childForFieldName("body");
   const first = body?.namedChild(0);
-  if (!first || first.type !== "expression_statement") return { text: null };
+  if (first?.type !== "expression_statement") return { text: null };
   const str = first.namedChild(0);
-  if (!str || str.type !== "string") return { text: null };
+  if (str?.type !== "string") return { text: null };
   const content = str.namedChildren.find((c) => c?.type === "string_content");
   const raw = content ? content.text : str.text.replace(/^[a-zA-Z]*("""|'''|"|')/, "").replace(/("""|'''|"|')$/, "");
   const lines: string[] = [];

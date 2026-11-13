@@ -1,0 +1,8 @@
+{
+  "name": "aliases",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "imports": {
+    "#internal/*": "./src/internal/*.js"
+  }
+}

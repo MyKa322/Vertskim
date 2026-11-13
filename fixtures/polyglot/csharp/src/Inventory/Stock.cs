@@ -4,7 +4,7 @@ using Acme.Pricing;
 namespace Acme.Inventory;
 
 /// <summary>What the warehouse currently holds.</summary>
-public class Stock : IStock
+public class Stock : IStock, Audited
 {
     private readonly List<Item> items = new();
 
@@ -26,4 +26,6 @@ public class Stock : IStock
     }
 
     private void Log(string message) { }
+
+    public int Changes() => 0;
 }

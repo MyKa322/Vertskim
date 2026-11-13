@@ -26,7 +26,7 @@ describe("analysing the sample project", () => {
       assert.equal(at("src/auth/session.ts#SessionStore.refresh")?.distance, 1);
       const middleware = at("src/api/middleware.ts#requireAuth");
       assert.equal(middleware?.distance, 2);
-      assert.equal(middleware?.confidence, "heuristic");
+      assert.equal(middleware?.confidence, "resolved");
       assert.equal(middleware?.via, "src/auth/session.ts#SessionStore.refresh");
       assert.equal(at("src/api/routes.ts#routes")?.distance, 3);
       assert.deepEqual(
@@ -45,7 +45,10 @@ describe("analysing the sample project", () => {
       );
       const withTests = project.impact([node("src/auth/tokens.ts#rotate")]);
       assert.ok(withTests.impacted.some((i) => i.isTest));
-      assert.deepEqual(withTests.tests.map((t) => t.path), ["tests/session.test.ts"]);
+      assert.deepEqual(
+        withTests.tests.map((t) => t.path),
+        ["tests/session.test.ts"],
+      );
       const without = project.impact([node("src/auth/tokens.ts#rotate")], { includeTests: false });
       assert.ok(without.impacted.every((i) => !i.isTest));
       assert.deepEqual(without.tests, []);
@@ -105,7 +108,10 @@ describe("analysing the sample project", () => {
       assert.equal(related?.mode, "related");
       assert.ok(related?.steps.some((s) => s.direction === "in"));
       assert.equal(project.path(node("package.json"), node("src/auth/tokens.ts#rotate")), null);
-      assert.equal(project.path(node("src/index.ts#main"), node("src/auth/tokens.ts#rotate"), { maxHops: 2 })?.mode, undefined);
+      assert.equal(
+        project.path(node("src/index.ts#main"), node("src/auth/tokens.ts#rotate"), { maxHops: 2 })?.mode,
+        undefined,
+      );
     });
   });
 
@@ -129,9 +135,15 @@ describe("analysing the sample project", () => {
     test("can be limited to a directory and a depth", () => {
       const map = project.overview(node("tools/"), 1);
       assert.equal(map.files, 5);
-      assert.deepEqual(map.tree.map((d) => d.id), ["tools/tests/"]);
+      assert.deepEqual(
+        map.tree.map((d) => d.id),
+        ["tools/tests/"],
+      );
       assert.ok(map.hubSymbols.every((h) => h.node.path.startsWith("tools/")));
-      assert.deepEqual(project.overview(undefined, 1).tree.flatMap((d) => d.children), []);
+      assert.deepEqual(
+        project.overview(undefined, 1).tree.flatMap((d) => d.children),
+        [],
+      );
     });
   });
 
@@ -162,7 +174,10 @@ describe("analysing the sample project", () => {
     test("starts from explicit seeds and reports unknown ones", () => {
       const result = project.context({ seeds: ["src/db/redis.ts#RedisClient", "src/nope.ts#Nope"] });
       assert.deepEqual(result.missingSeeds, ["src/nope.ts#Nope"]);
-      assert.deepEqual(result.seeds.map((s) => s.id), ["src/db/redis.ts#RedisClient"]);
+      assert.deepEqual(
+        result.seeds.map((s) => s.id),
+        ["src/db/redis.ts#RedisClient"],
+      );
       const ids = result.items.map((i) => i.node.id);
       assert.ok(ids.includes("src/db/redis.ts#RedisClient.put")); // member
       assert.ok(ids.includes("src/db/redis.ts#KeyValueStore")); // implemented interface

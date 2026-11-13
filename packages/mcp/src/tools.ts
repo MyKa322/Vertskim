@@ -1,14 +1,17 @@
-import {
-  EDGE_KINDS,
-  NODE_KINDS,
-  type GraphNode,
-  type Neighbor,
-  type OutlineEntry,
-  type Project,
-} from "@vertskim/core";
+import { EDGE_KINDS, NODE_KINDS, type GraphNode, type Neighbor, type OutlineEntry } from "@vertskim/core";
 import { z } from "zod";
 import { defineTool, maxTokens, notFound, type ToolSpec } from "./define.js";
-import { Budget, facts, kindLabel, lineRange, mark, noteLine, sourceBlock, statusLine } from "./format.js";
+import {
+  Budget,
+  facts,
+  kindLabel,
+  lineRange,
+  mark,
+  noteLine,
+  sourceBlock,
+  statusLine,
+  syntaxErrorLine,
+} from "./format.js";
 
 // ------------------------------------------------------------------ search
 
@@ -23,11 +26,13 @@ const graphSearch = defineTool({
     query: z
       .string()
       .min(1)
-      .describe("Name, partial name, keywords, or a path fragment. Example: `SessionStore`, `rotate token`, `auth/session`."),
+      .describe(
+        "Name, partial name, keywords, or a path fragment. Example: `SessionStore`, `rotate token`, `auth/session`.",
+      ),
     kinds: z
       .array(z.enum(NODE_KINDS))
       .optional()
-      .describe("Only return these node kinds, e.g. [\"function\", \"method\"]."),
+      .describe('Only return these node kinds, e.g. ["function", "method"].'),
     path: z
       .string()
       .optional()
@@ -89,9 +94,10 @@ const graphSearch = defineTool({
 
 // -------------------------------------------------------------------- node
 
-/** Id of an outline entry relative to its parent (`.method`) or its file (`#Symbol`). */
+/** Id of an outline entry relative to its parent (`.method`) or its file (`#Symbol`); whole when written elsewhere. */
 function idSuffix(node: GraphNode, parent: GraphNode): string {
   if (node.id.startsWith(parent.id)) return node.id.slice(parent.id.length);
+  if (node.path !== parent.path) return node.id; // a Go or Rust method written in another file than its type
   if (node.path && node.id.startsWith(node.path)) return node.id.slice(node.path.length);
   return node.id;
 }
@@ -143,7 +149,7 @@ const graphNode = defineTool({
   title: "Inspect graph nodes",
   description:
     "Details for specific nodes: signature, docstring, location, and direct relationships. For a file, class or " +
-    "directory it returns an outline (members with signatures) rather than the contents. Add \"source\" to " +
+    'directory it returns an outline (members with signatures) rather than the contents. Add "source" to ' +
     "`include` to get only that symbol's lines; use this instead of reading the whole file.",
   shape: {
     ids: z
@@ -156,7 +162,7 @@ const graphNode = defineTool({
     include: z
       .array(z.enum(["outline", "neighbors", "source"]))
       .default(["outline", "neighbors"])
-      .describe("What to return besides the header. Default [\"outline\", \"neighbors\"]."),
+      .describe('What to return besides the header. Default ["outline", "neighbors"].'),
     max_tokens: maxTokens(2000),
   },
   ids: (args) => args.ids,
@@ -174,6 +180,8 @@ const graphNode = defineTool({
       budget.push(`${node.id}  ${facts(node)}`);
       if (node.signature && node.kind !== "section") budget.push(`  ${node.signature}`);
       if (node.doc) budget.push(`  ${node.doc}`);
+      const broken = node.kind !== "directory" && node.kind !== "external" ? project.syntaxError(node.path) : null;
+      if (broken) budget.push(`  ${syntaxErrorLine(broken)}`);
       for (const note of project.notesFor([node.id]).get(node.id) ?? []) budget.push(`  ${noteLine(note)}`);
 
       if (include.has("outline")) renderOutline(node, info.outline, budget);
@@ -217,18 +225,18 @@ const graphNeighbors = defineTool({
   title: "Walk relationships from a node",
   description:
     "Walk relationships from a node: callers, callees, importers, subclasses, tests, docs that mention it. Use " +
-    "for \"who uses X\" or \"what does X depend on\". direction \"in\" = things that depend on this node. For a " +
+    'for "who uses X" or "what does X depend on". direction "in" = things that depend on this node. For a ' +
     "file, class or directory, relationships of its members are included.",
   shape: {
     id: z.string().min(1).describe("Node id, as returned by graph_search or graph_node."),
     direction: z
       .enum(["in", "out", "both"])
       .default("both")
-      .describe("\"in\": dependents (callers, importers). \"out\": dependencies. Default \"both\"."),
+      .describe('"in": dependents (callers, importers). "out": dependencies. Default "both".'),
     edge_kinds: z
       .array(z.enum(EDGE_KINDS))
       .optional()
-      .describe("Only follow these relationships. Default: all except \"contains\"."),
+      .describe('Only follow these relationships. Default: all except "contains".'),
     depth: z.number().int().min(1).max(3).default(1).describe("Hops to follow. Default 1."),
     limit: z.number().int().min(1).max(200).default(30).describe("Maximum neighbours. Default 30."),
     max_tokens: maxTokens(1500),

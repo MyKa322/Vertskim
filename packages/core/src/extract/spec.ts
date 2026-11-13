@@ -95,11 +95,36 @@ export interface ResolveContext {
  *   @ref.ident               any identifier; kept only if it names an import or a file-level
  *                            symbol, or the language's `keepIdent` says so
  *   @import                  an import statement, handed to parseImport
+ *   @scan                    a node the language reads more calls from (see scanCalls)
  *   @export.named | @export.default   a name exported separately from its definition, with @name
  *   @typeparam               a generic parameter name, excluded from @ref.type
+ *   @fieldvar                instead of @var: a field of the enclosing type, wherever it is
+ *                            written (a constructor parameter property, `this.x = new X()`)
+ *   @newtype                 instead of @vartype: the class a variable is constructed from;
+ *                            ranks below a written type
+ *   @varcall                 instead of @vartype: the function or method whose result the
+ *                            variable holds; its declared return type is looked up later
+ *   @varvalue                instead of @vartype: another value the variable is set to
+ *                            (`const db = this.store.db`), whose type it then shares
  *   @var + @vartype          a variable, parameter or field and its declared type, used to
  *                            work out what `variable.method()` calls
  */
+/** A function defined inside another needs at least this many lines to be worth a node of its own. */
+export const MIN_NESTED_LINES = 3;
+
+/** A call read from plain tokens: `name(…)`, `a.b.name(…)`, `a::name(…)` or `name!(…)`. */
+export interface TokenCall {
+  /** The called name. */
+  name: Node;
+  /**
+   * What is written before the name, with `.` between segments (`a.b`, `crate.cart`);
+   * `?` when it cannot be read; null for a plain call.
+   */
+  receiver: string | null;
+  /** True when a call result sits between the receiver and the name, so `receiver` is only where the chain starts. */
+  chained: boolean;
+}
+
 export interface LanguageSpec {
   /** Language label, matching `languageOf()`. */
   id: string;
@@ -118,11 +143,44 @@ export interface LanguageSpec {
   importsAreExports: boolean;
   /** True when a bare call inside a class may be to one of its own methods (Java, C#). */
   implicitSelf?: boolean;
+  /**
+   * True when the syntax does not say which base types are classes and which interfaces
+   * (C#'s `class A : B, C`): bases are captured as `extends`, and one that resolves to an
+   * interface is drawn as `implements`.
+   */
+  basesByTarget?: boolean;
+  /**
+   * True when a qualifier can be a namespace that is no scope of its own here (C++'s
+   * `shop::total()`): when it names nothing else, the name is looked up as if written bare.
+   */
+  namespaceQualifiers?: boolean;
+  /**
+   * True when functions are declared in one place and defined in another (C and C++
+   * headers): a use that reaches a declaration, a node of subkind `declaration`, is drawn
+   * to its definition when there is exactly one.
+   */
+  prototypes?: boolean;
+  /**
+   * True when classes and modules are visible everywhere by their full name, whatever
+   * file defines them, and may be reopened in several files (Ruby's constants).
+   */
+  globalTypes?: boolean;
   /** Type and identifier names never worth recording (built-in types). */
   ignoredNames?: Set<string>;
 
   /** Accept or reject a definition and settle its kind. */
-  classify(def: RawDef, parent: SymbolInfo | null): DefDecision | null;
+  /**
+   * Decide what a matched definition is, or null to leave it out. `nested` is true when it
+   * sits inside a function body, a callback or an object literal rather than directly in
+   * its parent (only for languages with {@link nestedDefs}).
+   */
+  classify(def: RawDef, parent: SymbolInfo | null, nested?: boolean): DefDecision | null;
+  /**
+   * Let definitions through the scope breakers when a named symbol encloses them:
+   * functions inside functions, methods of object literals. Those shorter than
+   * {@link MIN_NESTED_LINES} are left out.
+   */
+  nestedDefs?: boolean;
   /** Outermost node belonging to the definition (export wrapper, decorators). */
   outer(def: RawDef): Node;
   exported(def: RawDef, outer: Node, parent: SymbolInfo | null): Exported;
@@ -132,6 +190,31 @@ export interface LanguageSpec {
   isIdentUsage(node: Node): boolean;
   /** True for identifiers worth recording even though nothing in this file defines or imports them. */
   keepIdent?(name: string): boolean;
+  /**
+   * The type name a captured @vartype node stands for, or null when it says
+   * nothing usable (`any`, a union of unrelated types). Defaults to the node's text.
+   */
+  hintType?(node: Node): string | null;
+  /** Names of the language's global objects: a call on one (`Promise.all`) is never the project's. */
+  globals?: Set<string>;
+  /**
+   * Method names of the language's standard library common enough that matching one by name
+   * alone says nothing (Java's `getName`, Ruby's `each`), on top of the shared list.
+   */
+  commonMembers?: Set<string>;
+  /**
+   * Calls the grammar does not show as calls, read by the language itself from each node
+   * the query captures as `@scan`: the tokens of a Rust macro call, a Ruby method calling
+   * another by its bare name.
+   */
+  scanCalls?(node: Node): TokenCall[];
+  /**
+   * When a file does not parse, a version of its text to try instead: what a preprocessor
+   * would remove (C's annotation and export macros), blanked with spaces so that every
+   * position stays where it was. The parse with fewer errors is kept. Null when there is
+   * nothing to remove. `root` is the failed parse, for telling code from comments.
+   */
+  reparse?(source: string, root: Node): string | null;
   parseImport(node: Node): ImportDecl[];
   resolveImport(imp: ImportDecl, fromFile: string, ctx: ResolveContext): ResolvedImport[];
   /** The package or namespace the file declares (Go, Java, C#). */

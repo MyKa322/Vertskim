@@ -1,4 +1,4 @@
-import type { GraphNode, NoteView, Project } from "@vertskim/core";
+import type { GraphNode, NoteView, Project, SyntaxErrorFile } from "@vertskim/core";
 
 /**
  * Rough token count. Code averages fewer characters per token than prose, so
@@ -86,6 +86,20 @@ export function mark(confidence: string): string {
   return confidence === "heuristic" ? "~" : "";
 }
 
+/** Where files do not parse, so an assistant learns that its edit broke one. */
+function syntaxNote(errors: SyntaxErrorFile[]): string {
+  if (errors.length === 0) return "";
+  if (errors.length > 2) return `; ${errors.length} files have syntax errors (graph_sync lists them)`;
+  return `; syntax error in ${errors.map((e) => `${e.path}:${e.line}`).join(", ")}`;
+}
+
+/** What a syntax error in a file means for what the graph says about it. */
+export function syntaxErrorLine(error: SyntaxErrorFile): string {
+  return error.keptSymbols
+    ? `syntax error at line ${error.line}; the symbols shown are from the last version of the file that parsed`
+    : `syntax error at line ${error.line}; symbols after it may be missing`;
+}
+
 /** One line describing how current the answer is. */
 export function statusLine(project: Project): string {
   const status = project.status();
@@ -94,7 +108,9 @@ export function statusLine(project: Project): string {
     return `index: indexing ${Math.round(status.progress * 100)}%, results may be incomplete; ask again shortly`;
   }
   const note = status.truncated ? ", file limit reached so some files are not indexed" : "";
-  return `index: fresh (${status.files} files, ${status.nodes} nodes${note})`;
+  const checked = project.compilerIndexes().reduce((sum, index) => sum + index.filesInUse, 0);
+  const compiler = checked > 0 ? `, relationships in ${checked} checked by a compiler` : "";
+  return `index: fresh (${status.files} files, ${status.nodes} nodes${compiler}${note})${syntaxNote(status.syntaxErrors)}`;
 }
 
 /** Prefix every line with its line number: `42| code`. */

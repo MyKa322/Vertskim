@@ -56,8 +56,7 @@ class EventLog {
         const { done, value } = await reader.read();
         if (done) return;
         buffer += decoder.decode(value, { stream: true });
-        let end: number;
-        while ((end = buffer.indexOf("\n\n")) >= 0) {
+        for (let end = buffer.indexOf("\n\n"); end >= 0; end = buffer.indexOf("\n\n")) {
           const frame = buffer.slice(0, end);
           buffer = buffer.slice(end + 2);
           const event = /^event: (.+)$/m.exec(frame)?.[1];
@@ -103,6 +102,7 @@ describe("the local server", () => {
   let assets: string;
   const get = (path: string, token = server.token) =>
     fetch(`${server.origin}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  // biome-ignore lint/suspicious/noExplicitAny: JSON from the API under test; the assertions check its shape
   const json = async (path: string) => (await get(path)).json() as Promise<Record<string, any>>;
 
   before(async () => {
@@ -158,6 +158,11 @@ describe("the local server", () => {
     const script = await fetch(`${server.origin}/assets/app-abc123.js`);
     assert.match(script.headers.get("content-type") ?? "", /javascript/);
     assert.match(script.headers.get("cache-control") ?? "", /immutable/);
+    // Sent compressed to a browser that accepts it (fetch asks for gzip and unpacks it), plain otherwise.
+    assert.equal(script.headers.get("content-encoding"), "gzip");
+    const plain = await raw(server.port, "/assets/app-abc123.js", { Host: `127.0.0.1:${server.port}` });
+    assert.equal(plain.status, 200);
+    assert.match(plain.body, /app/);
 
     assert.equal((await fetch(`${server.origin}/assets/missing.js`)).status, 404);
     // a path that is not a file is the page itself, as in any single-page app
@@ -196,7 +201,18 @@ describe("the local server", () => {
 
     const search = await json("/api/search?q=rotate");
     assert.equal(search.hits[0].node.id, "src/auth/tokens.ts#rotate");
+    // Search by meaning is off here, so nothing is marked as found by it.
+    assert.equal(search.hits[0].byMeaning, false);
     assert.deepEqual((await json("/api/reveal?id=README.md")).expand, []);
+
+    // The explorer's list of files: every one of them, each a node of the graph.
+    const tree = await json("/api/tree");
+    assert.equal(tree.files.length, status.files);
+    assert.equal(tree.version, status.version);
+    const session = tree.files.find((f: { path: string }) => f.path === "src/auth/session.ts");
+    assert.equal(session.language, "typescript");
+    assert.equal(session.subkind, "source");
+    assert.equal(session.syntaxError, null);
 
     assert.equal((await get("/api/node?id=src/nope.ts")).status, 404);
     assert.equal((await get("/api/node")).status, 400);
@@ -259,6 +275,7 @@ describe("notes through the local server", () => {
         body: JSON.stringify(body),
       });
     const get = async (path: string) =>
+      // biome-ignore lint/suspicious/noExplicitAny: JSON from the API under test; the assertions check its shape
       (await (await fetch(`${server.origin}${path}`, { headers: auth })).json()) as Record<string, any>;
     const log = new EventLog(`${server.origin}/api/events?t=${server.token}`);
     await log.next("hello");

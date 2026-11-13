@@ -1,5 +1,34 @@
 import { createHash } from "node:crypto";
 
+/**
+ * Text of a source file. UTF-8 unless a byte-order mark says otherwise; the
+ * mark itself is dropped. Some Windows tools save files as UTF-16.
+ */
+export function decodeText(bytes: Buffer): string {
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.subarray(2).toString("utf16le");
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    const swapped = Buffer.from(bytes.subarray(2));
+    swapped.swap16();
+    return swapped.toString("utf16le");
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return bytes.subarray(3).toString("utf8");
+  }
+  return bytes.toString("utf8");
+}
+
+/**
+ * Replace control characters other than tab and line breaks, which in a terminal can
+ * recolour text, move the cursor or set the clipboard, with visible stand-ins.
+ */
+export function stripControl(text: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: finding control characters is the point
+  return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, (c) => {
+    const code = c.charCodeAt(0);
+    return code < 0x20 ? String.fromCharCode(0x2400 + code) : code === 0x7f ? "\u2421" : "\ufffd";
+  });
+}
+
 export function sha1(text: string | Uint8Array): string {
   return createHash("sha1").update(text).digest("hex");
 }

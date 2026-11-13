@@ -5,7 +5,9 @@ import { after, before, describe, test } from "node:test";
 import { Project } from "../project.js";
 import { startFakeModelServer, type FakeModelServer } from "../testing/embedding-server.js";
 import { copyFixture, removeTempDirs, snapshot, tempDir, write } from "../testing/helpers.js";
+import { DatabaseSync } from "node:sqlite";
 import { checkConfig, createEmbedder, isLoopback, ollamaEmbeddingModels, prefixesFor } from "./provider.js";
+import { TEXT_VERSION } from "./text.js";
 
 let server: FakeModelServer;
 before(async () => {
@@ -31,21 +33,39 @@ async function wait(until: () => boolean, ms = 5000): Promise<void> {
 
 describe("embedding providers", () => {
   test("only a model server on this machine is accepted unless a remote one is allowed", () => {
-    for (const url of ["http://localhost:11434", "http://127.0.0.1:1234/v1", "http://[::1]:8080", "http://lm.localhost:1234"]) {
+    for (const url of [
+      "http://localhost:11434",
+      "http://127.0.0.1:1234/v1",
+      "http://[::1]:8080",
+      "http://lm.localhost:1234",
+    ]) {
       assert.equal(isLoopback(url), true, url);
     }
-    for (const url of ["http://192.168.1.20:11434", "https://api.example.com/v1", "http://127.0.0.1.example.com", "nonsense"]) {
+    for (const url of [
+      "http://192.168.1.20:11434",
+      "https://api.example.com/v1",
+      "http://127.0.0.1.example.com",
+      "nonsense",
+    ]) {
       assert.equal(isLoopback(url), false, url);
     }
     assert.throws(
       () => checkConfig({ provider: "openai", model: "m", url: "https://api.example.com/v1" }),
       /not on this machine/,
     );
-    const remote = checkConfig({ provider: "openai", model: "m", url: "https://api.example.com/v1/", allowRemote: true });
+    const remote = checkConfig({
+      provider: "openai",
+      model: "m",
+      url: "https://api.example.com/v1/",
+      allowRemote: true,
+    });
     assert.equal(remote.url, "https://api.example.com/v1");
     assert.equal(checkConfig({ provider: "ollama", model: " nomic-embed-text " }).url, "http://127.0.0.1:11434");
     assert.equal(checkConfig({ provider: "ollama", model: "nomic-embed-text" }).model, "nomic-embed-text");
-    assert.equal(checkConfig({ provider: "transformers", model: "Xenova/all-MiniLM-L6-v2", url: "http://x" }).url, undefined);
+    assert.equal(
+      checkConfig({ provider: "transformers", model: "Xenova/all-MiniLM-L6-v2", url: "http://x" }).url,
+      undefined,
+    );
     assert.throws(() => checkConfig({ provider: "cloud", model: "m" }), /unknown embedding provider/);
     assert.throws(() => checkConfig({ provider: "ollama" }), /model has to be named/);
     assert.throws(() => checkConfig({ provider: "ollama", model: "m", url: "ftp://127.0.0.1" }), /not an http/);
@@ -57,10 +77,13 @@ describe("embedding providers", () => {
     assert.deepEqual(prefixes("intfloat/multilingual-e5-small"), { query: "query: ", document: "passage: " });
     assert.match(prefixes("bge-small-en-v1.5").query, /^Represent this sentence/);
     assert.deepEqual(prefixes("all-minilm"), { query: "", document: "" });
-    assert.deepEqual(prefixesFor({ provider: "ollama", model: "nomic-embed-text", queryPrefix: "q: ", documentPrefix: "" }), {
-      query: "q: ",
-      document: "",
-    });
+    assert.deepEqual(
+      prefixesFor({ provider: "ollama", model: "nomic-embed-text", queryPrefix: "q: ", documentPrefix: "" }),
+      {
+        query: "q: ",
+        document: "",
+      },
+    );
   });
 
   test("speaks to an Ollama server", async () => {
@@ -68,12 +91,17 @@ describe("embedding providers", () => {
     assert.equal(embedder.id, "ollama:nomic-embed-text");
     const seen = server.texts.length;
     const [a, b] = await embedder.embed(["renew a session", "format a report"], "document");
-    assert.deepEqual(server.texts.slice(seen), ["search_document: renew a session", "search_document: format a report"]);
+    assert.deepEqual(server.texts.slice(seen), [
+      "search_document: renew a session",
+      "search_document: format a report",
+    ]);
     assert.equal(a!.length, 32);
     // Whatever length the server's vectors have, stored ones are unit length.
     for (const v of [a!, b!]) assert.ok(Math.abs(Math.hypot(...v) - 1) < 1e-5);
     await embedder.embed(["anything"], "query");
     assert.equal(server.texts.at(-1), "search_query: anything");
+    // Ollama is asked to keep the model loaded between searches.
+    assert.equal(server.lastBody?.keep_alive, "30m");
     assert.deepEqual(await embedder.embed([], "query"), []);
 
     const missing = createEmbedder(checkConfig({ provider: "ollama", model: "no-such-model", url: server.url }));
@@ -83,7 +111,12 @@ describe("embedding providers", () => {
   test("speaks to an OpenAI-compatible server", async () => {
     process.env.VERTSKIM_TEST_KEY = "secret-for-the-test";
     try {
-      const config = checkConfig({ provider: "openai", model: "all-minilm", url: server.openaiUrl, apiKeyEnv: "VERTSKIM_TEST_KEY" });
+      const config = checkConfig({
+        provider: "openai",
+        model: "all-minilm",
+        url: server.openaiUrl,
+        apiKeyEnv: "VERTSKIM_TEST_KEY",
+      });
       const embedder = createEmbedder(config);
       const [auth, report] = await embedder.embed(["login credentials", "report summary"], "document");
       assert.equal(server.lastAuthorization, "Bearer secret-for-the-test");
@@ -98,7 +131,9 @@ describe("embedding providers", () => {
   });
 
   test("reports a server that is not there, and finds the embedding models of one that is", async () => {
-    const dead = createEmbedder(checkConfig({ provider: "ollama", model: "nomic-embed-text", url: "http://127.0.0.1:9" }));
+    const dead = createEmbedder(
+      checkConfig({ provider: "ollama", model: "nomic-embed-text", url: "http://127.0.0.1:9" }),
+    );
     await assert.rejects(dead.embed(["x"], "query", { timeoutMs: 3000 }), /could not reach|did not answer/);
     assert.equal(await ollamaEmbeddingModels("http://127.0.0.1:9", 500), null);
     assert.deepEqual(await ollamaEmbeddingModels(server.url), ["nomic-embed-text:latest", "all-minilm:latest"]);
@@ -163,11 +198,19 @@ describe("search by meaning", () => {
     assert.match(refresh, /in src\/auth\/session\.ts/);
     assert.match(refresh, /Rotates the refresh token and extends the session TTL\./);
     assert.match(refresh, /await this\.loadSession\(token\)/);
-    assert.ok(sent.some((text) => text.includes("file src/auth/session.ts") && text.includes("contains: Session, BaseStore")));
+    assert.ok(
+      sent.some((text) => text.includes("file src/auth/session.ts") && text.includes("contains: Session, BaseStore")),
+    );
     assert.ok(sent.some((text) => text.includes("section of docs/architecture.md")));
     // Not worth a vector: a file with nothing parsed in it, and plain variables.
-    assert.equal(sent.some((text) => text.includes("file assets/logo.svg")), false);
-    assert.equal(sent.some((text) => text.includes("variable TOKEN_TTL_SECONDS")), false);
+    assert.equal(
+      sent.some((text) => text.includes("file assets/logo.svg")),
+      false,
+    );
+    assert.equal(
+      sent.some((text) => text.includes("variable TOKEN_TTL_SECONDS")),
+      false,
+    );
 
     // A second pass has nothing to do.
     const requests = server.requests;
@@ -231,7 +274,7 @@ describe("search by meaning", () => {
     let seen = server.texts.length;
     let made = await project.embed();
     assert.equal(made.embedded, 1);
-    assert.match(server.texts.at(-1)!, /function issueToken[\s\S]*Mint a brand new bearer credential\./);
+    assert.match(server.texts.at(-1)!, /Mint a brand new bearer credential\.[\s\S]*function issueToken/);
     assert.equal(server.texts.length, seen + 1);
 
     rmSync(join(root, "tools/formatting.py"));
@@ -240,7 +283,34 @@ describe("search by meaning", () => {
     assert.ok(made.removed >= 2, `${made.removed} dropped`);
     assert.equal(project.embeddingStatus().embedded, before_ - made.removed + made.embedded);
     const found = await project.searchWithMeaning({ query: "format a report summary", limit: 10 });
-    assert.equal(found.hits.some((hit) => hit.node.path === "tools/formatting.py"), false);
+    assert.equal(
+      found.hits.some((hit) => hit.node.path === "tools/formatting.py"),
+      false,
+    );
+  });
+
+  test("works every text out again when the recipe for it changes, and re-embeds only those that differ", async () => {
+    // Vectors made by an older version of Vertskim, whose texts were put together differently.
+    const db = new DatabaseSync(join(dataDir, "vectors.db"));
+    db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('text_version', '1')").run();
+    db.close();
+    const requests = server.requests;
+    const made = await project.embed();
+    assert.equal(made.embedded, 0, "the texts came out the same, so nothing needed a new vector");
+    assert.equal(server.requests, requests);
+    const check = new DatabaseSync(join(dataDir, "vectors.db"));
+    assert.equal(check.prepare("SELECT value FROM meta WHERE key = 'text_version'").get()?.value, String(TEXT_VERSION));
+    check.close();
+  });
+
+  test("a one-off search brings the vectors of changed code up to date first", async () => {
+    const path = "src/auth/tokens.ts";
+    const source = readFileSync(join(root, path), "utf8");
+    write(root, path, source.replace("Replace a token with a new one", "Swap a token for a fresh one"), 5);
+    await project.sync();
+    const seen = server.texts.length;
+    await project.searchWithMeaning({ query: "swap a token for a fresh one" });
+    assert.ok(server.texts.slice(seen).some((text) => text.includes("Swap a token for a fresh one")));
   });
 
   test("keeps its vectors when the graph is rebuilt", async () => {
@@ -253,6 +323,9 @@ describe("search by meaning", () => {
   });
 
   test("falls back to names while the model is not answering", async () => {
+    const before = server.texts.length;
+    const pending = await project.embed();
+    assert.equal(pending.embedded, 0, `pending: ${JSON.stringify(server.texts.slice(before))}`);
     server.failWith = 503;
     messages.length = 0;
     try {
@@ -263,8 +336,13 @@ describe("search by meaning", () => {
       assert.match(project.embeddingStatus().error ?? "", /503/);
       // It is then left alone for a while instead of being asked on every search.
       const requests = server.requests;
+      const sent = server.texts.length;
       await project.searchWithMeaning({ query: "another question about credentials" });
-      assert.equal(server.requests, requests);
+      assert.equal(
+        server.requests,
+        requests,
+        `sent: ${JSON.stringify(server.texts.slice(sent))} last: ${JSON.stringify(server.lastBody)}`,
+      );
       assert.ok(Date.now() - started < 3000);
     } finally {
       server.failWith = 0;
@@ -308,7 +386,9 @@ describe("embedding in the background", () => {
       write(root, "src/extra.ts", "/** Renew every expired login. */\nexport function sweep(): void {}\n", 1);
       await project.sync({ paths: ["src/extra.ts"] });
       await wait(() => project.embeddingStatus().embedded === before_ + 2 && !project.embeddingStatus().running);
-      assert.ok(server.texts.some((text) => text.includes("function sweep") && text.includes("Renew every expired login.")));
+      assert.ok(
+        server.texts.some((text) => text.includes("function sweep") && text.includes("Renew every expired login.")),
+      );
     } finally {
       await project.close();
     }

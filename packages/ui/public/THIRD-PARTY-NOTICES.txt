@@ -1,0 +1,11 @@
+Vertskim's 3D view includes the following third-party material.
+
+vscode-icons
+https://github.com/vscode-icons/vscode-icons
+
+  The file and folder icons, used unchanged, are by the vscode-icons contributors and are
+  licensed under the Creative Commons Attribution-ShareAlike 4.0 International licence:
+  https://creativecommons.org/licenses/by-sa/4.0/
+
+  Icons that show a brand (a language or product logo) remain under the terms of that brand's
+  owner.

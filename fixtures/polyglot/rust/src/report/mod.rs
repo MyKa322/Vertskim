@@ -6,3 +6,10 @@ use crate::account::{Account, Describe};
 pub fn summary(account: &Account) -> String {
     format::line(&account.describe())
 }
+
+impl Account {
+    /// The account's line in a report: a method written in another module than its type.
+    pub fn report_line(&self) -> String {
+        summary(self)
+    }
+}

@@ -8,12 +8,14 @@ import type {
   GraphNode,
   ImportDecl,
   RawRef,
+  FieldHint,
   ScipFact,
+  SyntaxErrorFile,
 } from "../types.js";
-import { dirId, posixBasename, posixDirname, splitIdentifier } from "../util.js";
+import { dirId, posixBasename, posixDirname, splitIdentifier, stripControl } from "../util.js";
 
 /** Bump when the table layout changes; the database is rebuilt from scratch. */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
@@ -26,7 +28,9 @@ CREATE TABLE IF NOT EXISTS files (
   language TEXT,
   subkind TEXT NOT NULL,
   lines INTEGER NOT NULL DEFAULT 0,
-  package TEXT
+  package TEXT,
+  syntax_error INTEGER,
+  kept_symbols INTEGER NOT NULL DEFAULT 0
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS nodes (
@@ -47,6 +51,7 @@ CREATE TABLE IF NOT EXISTS nodes (
 CREATE INDEX IF NOT EXISTS nodes_path ON nodes(path);
 CREATE INDEX IF NOT EXISTS nodes_name ON nodes(name);
 CREATE INDEX IF NOT EXISTS nodes_parent ON nodes(parent);
+CREATE INDEX IF NOT EXISTS nodes_parent_name ON nodes(parent, name);
 
 CREATE TABLE IF NOT EXISTS edges (
   src TEXT NOT NULL,
@@ -72,6 +77,18 @@ CREATE TABLE IF NOT EXISTS refs (
 );
 CREATE INDEX IF NOT EXISTS refs_origin ON refs(origin_file);
 CREATE INDEX IF NOT EXISTS refs_name ON refs(name);
+
+-- Fields of types, with the type of each as the file says it and, once resolved, as a node id
+-- ('!' for a type outside the project, '!c' for one that holds other values, NULL for unknown).
+CREATE TABLE IF NOT EXISTS fields (
+  origin_file TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  resolved TEXT,
+  PRIMARY KEY (owner, name)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS fields_origin ON fields(origin_file);
 
 CREATE TABLE IF NOT EXISTS imports (
   origin_file TEXT NOT NULL,
@@ -108,7 +125,8 @@ CREATE TABLE IF NOT EXISTS scip_settled (
   src TEXT NOT NULL,
   name TEXT NOT NULL,
   member INTEGER NOT NULL,
-  PRIMARY KEY (origin_file, src, name, member)
+  receiver TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (origin_file, src, name, member, receiver)
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS scip_facts (
@@ -185,6 +203,8 @@ function rowToFile(row: Record<string, unknown>): FileRecord {
     subkind: row.subkind as FileRecord["subkind"],
     lines: row.lines as number,
     package: (row.package as string | null) ?? null,
+    syntaxError: (row.syntax_error as number | null) ?? null,
+    keptSymbols: (row.kept_symbols as number) === 1,
   };
 }
 
@@ -208,7 +228,19 @@ export class GraphStore {
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA synchronous = NORMAL");
     this.db.exec("PRAGMA busy_timeout = 5000");
-    this.db.exec(SCHEMA);
+    try {
+      this.db.exec(SCHEMA);
+    } catch (error) {
+      this.db.close();
+      // The SQLite built into Node has had full-text search since 22.16 (May 2025); 22.13 to 22.15 lack it.
+      if (/no such module: fts5/i.test((error as Error).message)) {
+        throw new Error(
+          `The SQLite built into Node ${process.version} has no full-text search (FTS5), which Vertskim needs. ` +
+            "Use Node 22.16 or newer.",
+        );
+      }
+      throw error;
+    }
   }
 
   close(): void {
@@ -243,6 +275,26 @@ export class GraphStore {
     }
   }
 
+  /**
+   * Run `fn` with all its writes in one transaction, even across awaits. Many
+   * small transactions cost far more than one large one.
+   */
+  async batch<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.txDepth > 0) return fn();
+    this.db.exec("BEGIN IMMEDIATE");
+    this.txDepth++;
+    try {
+      const result = await fn();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    } finally {
+      this.txDepth--;
+    }
+  }
+
   // ---------------------------------------------------------------- meta
 
   getMeta(key: string): string | null {
@@ -251,16 +303,29 @@ export class GraphStore {
   }
 
   setMeta(key: string, value: string): void {
-    this.stmt(
-      "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-    ).run(key, value);
+    this.stmt("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
+      key,
+      value,
+    );
   }
 
   /** Remove all indexed data. Used when the schema or extractor version changes. */
   reset(): void {
     this.tx(() => {
       // Compiler-index facts go too: they name nodes, and are read again from their files afterwards.
-      const tables = ["files", "nodes", "edges", "refs", "imports", "nodes_fts", "scip_sources", "scip_files", "scip_facts", "scip_settled"];
+      const tables = [
+        "files",
+        "nodes",
+        "edges",
+        "refs",
+        "imports",
+        "nodes_fts",
+        "scip_sources",
+        "scip_files",
+        "scip_facts",
+        "scip_settled",
+        "fields",
+      ];
       for (const table of tables) {
         this.db.exec(`DELETE FROM ${table}`);
       }
@@ -292,6 +357,52 @@ export class GraphStore {
       .map(rowToFile);
   }
 
+  /**
+   * The file changed but no longer parses: record its new content, and keep the
+   * symbols, references and imports of the last version that did.
+   */
+  keepSymbols(file: FileRecord, syntaxError: number): void {
+    this.stmt(
+      "UPDATE files SET hash = ?, size = ?, mtime_ms = ?, lines = ?, syntax_error = ?, kept_symbols = 1 WHERE path = ?",
+    ).run(file.hash, file.size, file.mtimeMs, file.lines, syntaxError, file.path);
+  }
+
+  /** Files that do not parse cleanly, in path order. */
+  syntaxErrors(): SyntaxErrorFile[] {
+    return this.stmt("SELECT path, syntax_error, kept_symbols FROM files WHERE syntax_error IS NOT NULL ORDER BY path")
+      .all()
+      .map((r) => ({
+        path: r.path as string,
+        line: r.syntax_error as number,
+        keptSymbols: (r.kept_symbols as number) === 1,
+      }));
+  }
+
+  /** The fields recorded for a file's types. */
+  fieldsOf(path: string): FieldHint[] {
+    return this.stmt("SELECT owner, name, type FROM fields WHERE origin_file = ?")
+      .all(path)
+      .map((r) => ({ owner: r.owner as string, name: r.name as string, type: r.type as string }));
+  }
+
+  setFieldResolved(owner: string, name: string, resolved: string | null): void {
+    this.stmt("UPDATE fields SET resolved = ? WHERE owner = ? AND name = ?").run(resolved, owner, name);
+  }
+
+  /** What a field's type resolved to, or undefined when the type has no such field on record. */
+  fieldOf(owner: string, name: string): string | null | undefined {
+    const row = this.stmt("SELECT resolved FROM fields WHERE owner = ? AND name = ?").get(owner, name);
+    return row === undefined ? undefined : ((row.resolved as string | null) ?? null);
+  }
+
+  /** Number of symbols and sections stored for a file. */
+  symbolCount(path: string): number {
+    const row = this.stmt("SELECT COUNT(*) AS c FROM nodes WHERE path = ? AND kind NOT IN ('file', 'directory')").get(
+      path,
+    );
+    return Number(row?.c ?? 0);
+  }
+
   touchFile(path: string, size: number, mtimeMs: number): void {
     this.stmt("UPDATE files SET size = ?, mtime_ms = ? WHERE path = ?").run(size, mtimeMs, path);
   }
@@ -299,11 +410,14 @@ export class GraphStore {
   /** Remove a file and everything derived from its contents. */
   removeFile(path: string): void {
     this.tx(() => {
-      this.stmt("DELETE FROM nodes_fts WHERE rowid IN (SELECT nid FROM nodes WHERE path = ? AND kind != 'directory')").run(path);
+      this.stmt(
+        "DELETE FROM nodes_fts WHERE rowid IN (SELECT nid FROM nodes WHERE path = ? AND kind != 'directory')",
+      ).run(path);
       this.stmt("DELETE FROM nodes WHERE path = ? AND kind != 'directory'").run(path);
       this.stmt("DELETE FROM edges WHERE origin_file = ?").run(path);
       this.stmt("DELETE FROM refs WHERE origin_file = ?").run(path);
       this.stmt("DELETE FROM imports WHERE origin_file = ?").run(path);
+      this.stmt("DELETE FROM fields WHERE origin_file = ?").run(path);
       this.stmt("DELETE FROM files WHERE path = ?").run(path);
     });
   }
@@ -313,7 +427,8 @@ export class GraphStore {
     this.tx(() => {
       this.removeFile(file.path);
       this.stmt(
-        "INSERT INTO files (path, hash, size, mtime_ms, language, subkind, lines, package) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        `INSERT INTO files (path, hash, size, mtime_ms, language, subkind, lines, package, syntax_error, kept_symbols)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       ).run(
         file.path,
         file.hash,
@@ -323,6 +438,7 @@ export class GraphStore {
         file.subkind,
         file.lines,
         file.package ?? extraction.package ?? null,
+        extraction.syntaxError ?? null,
       );
 
       const dir = posixDirname(file.path);
@@ -378,6 +494,10 @@ export class GraphStore {
       for (const imp of extraction.imports) {
         insertImport.run(file.path, imp.specifier, imp.line, JSON.stringify(imp.names), imp.reexport ? 1 : 0);
       }
+      const insertField = this.stmt(
+        "INSERT OR REPLACE INTO fields (origin_file, owner, name, type, resolved) VALUES (?, ?, ?, ?, NULL)",
+      );
+      for (const field of extraction.fields ?? []) insertField.run(file.path, field.owner, field.name, field.type);
     });
   }
 
@@ -396,8 +516,8 @@ export class GraphStore {
       node.startLine ?? null,
       node.endLine ?? null,
       node.language ?? null,
-      node.signature ?? null,
-      node.doc ?? null,
+      node.signature == null ? null : stripControl(node.signature),
+      node.doc == null ? null : stripControl(node.doc),
       node.exported,
     );
     if (Number(result.changes) === 0) return;
@@ -510,10 +630,20 @@ export class GraphStore {
 
   // --------------------------------------------------------------- edges
 
+  /**
+   * Add an edge, or add to the weight of the same one already drawn. The edge keeps the strongest
+   * evidence anything gave for it: a guess does not stay a guess once a typed call proves it.
+   */
   addEdge(edge: GraphEdge): void {
     this.stmt(
       `INSERT INTO edges (src, dst, kind, weight, confidence, origin_file, line) VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(src, kind, dst) DO UPDATE SET weight = weight + excluded.weight`,
+       ON CONFLICT(src, kind, dst) DO UPDATE SET
+         weight = weight + excluded.weight,
+         confidence = CASE
+           WHEN confidence = 'exact' OR excluded.confidence = 'exact' THEN 'exact'
+           WHEN confidence = 'resolved' OR excluded.confidence = 'resolved' THEN 'resolved'
+           ELSE confidence
+         END`,
     ).run(edge.src, edge.dst, edge.kind, edge.weight, edge.confidence, edge.originFile, edge.line ?? null);
   }
 
@@ -616,7 +746,9 @@ export class GraphStore {
   removeScipSource(path: string): void {
     this.tx(() => {
       this.stmt("DELETE FROM scip_facts WHERE origin_file IN (SELECT path FROM scip_files WHERE source = ?)").run(path);
-      this.stmt("DELETE FROM scip_settled WHERE origin_file IN (SELECT path FROM scip_files WHERE source = ?)").run(path);
+      this.stmt("DELETE FROM scip_settled WHERE origin_file IN (SELECT path FROM scip_files WHERE source = ?)").run(
+        path,
+      );
       this.stmt("DELETE FROM scip_files WHERE source = ?").run(path);
       this.stmt("DELETE FROM scip_sources WHERE path = ?").run(path);
     });
@@ -634,10 +766,12 @@ export class GraphStore {
     this.tx(() => {
       this.stmt("DELETE FROM scip_facts WHERE origin_file = ?").run(path);
       this.stmt("DELETE FROM scip_settled WHERE origin_file = ?").run(path);
-      const note = this.stmt("INSERT OR IGNORE INTO scip_settled (origin_file, src, name, member) VALUES (?, ?, ?, ?)");
+      const note = this.stmt(
+        "INSERT OR IGNORE INTO scip_settled (origin_file, src, name, member, receiver) VALUES (?, ?, ?, ?, ?)",
+      );
       for (const key of settled) {
-        const [src, name, member] = key.split("\u0000");
-        note.run(path, src!, name!, Number(member));
+        const [src, name, member, receiver] = key.split("\u0000");
+        note.run(path, src!, name!, Number(member), receiver ?? "");
       }
       this.stmt("INSERT OR REPLACE INTO scip_files (path, source, hash) VALUES (?, ?, ?)").run(path, source, hash);
       const insert = this.stmt(
@@ -681,27 +815,31 @@ export class GraphStore {
     return Number(row?.c ?? 0);
   }
 
-  /** What the compiler resolved in a file: scope, name and member flag (0 or 1), joined by NULs. */
+  /** What the compiler resolved in a file: scope, name, member flag (0 or 1) and receiver, joined by NULs. */
   scipSettled(path: string): Set<string> {
     return new Set(
-      this.stmt("SELECT src, name, member FROM scip_settled WHERE origin_file = ?")
+      this.stmt("SELECT src, name, member, receiver FROM scip_settled WHERE origin_file = ?")
         .all(path)
-        .map((r) => `${r.src as string}\u0000${r.name as string}\u0000${r.member as number}`),
+        .map(
+          (r) => `${r.src as string}\u0000${r.name as string}\u0000${r.member as number}\u0000${r.receiver as string}`,
+        ),
     );
   }
 
   /** A guess turned out right. */
   confirmGuess(src: string, kind: EdgeKind, dst: string): void {
-    this.stmt("UPDATE edges SET confidence = 'exact' WHERE src = ? AND kind = ? AND dst = ? AND confidence = 'heuristic'").run(
-      src,
-      kind,
-      dst,
-    );
+    this.stmt(
+      "UPDATE edges SET confidence = 'exact' WHERE src = ? AND kind = ? AND dst = ? AND confidence = 'heuristic'",
+    ).run(src, kind, dst);
   }
 
   /** A guess turned out wrong. An edge that something else also vouches for is left alone. */
   deleteGuess(src: string, kind: EdgeKind, dst: string): void {
-    this.stmt("DELETE FROM edges WHERE src = ? AND kind = ? AND dst = ? AND confidence = 'heuristic'").run(src, kind, dst);
+    this.stmt("DELETE FROM edges WHERE src = ? AND kind = ? AND dst = ? AND confidence = 'heuristic'").run(
+      src,
+      kind,
+      dst,
+    );
   }
 
   /** True when one node inherits from or implements the other. */

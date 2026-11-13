@@ -1,7 +1,15 @@
 import type { Node } from "@vscode/tree-sitter-wasm";
 import type { Exported, ImportDecl } from "../../types.js";
 import { posixBasename, posixDirname } from "../../util.js";
-import type { DefDecision, DocInfo, LanguageSpec, RawDef, ResolveContext, ResolvedImport, SymbolInfo } from "../spec.js";
+import type {
+  DefDecision,
+  DocInfo,
+  LanguageSpec,
+  RawDef,
+  ResolveContext,
+  ResolvedImport,
+  SymbolInfo,
+} from "../spec.js";
 import { commentAbove, fieldIs, signatureBeforeBody } from "./common.js";
 
 const QUERY = `
@@ -44,10 +52,27 @@ const QUERY = `
 (field_declaration type: (type_identifier) @vartype declarator: (variable_declarator name: (identifier) @var))
 (field_declaration type: (generic_type (type_identifier) @vartype) declarator: (variable_declarator name: (identifier) @var))
 (enhanced_for_statement type: (type_identifier) @vartype name: (identifier) @var)
+(formal_parameter type: (scoped_type_identifier) @vartype name: (identifier) @var)
+(local_variable_declaration type: (scoped_type_identifier) @vartype declarator: (variable_declarator name: (identifier) @var))
+(field_declaration type: (scoped_type_identifier) @vartype declarator: (variable_declarator name: (identifier) @var))
 `;
 
+// biome-ignore format: a list of words reads better packed
 const BUILTINS = new Set([
   "String", "Object", "Integer", "Long", "Double", "Float", "Boolean", "Character", "Byte", "Short", "Void", "var",
+]);
+
+/** Standard-library methods too common for a name-only match to mean anything. */
+// biome-ignore format: a list of words reads better packed
+const COMMON_MEMBERS = new Set([
+  "getName", "getKey", "getValue", "getClass", "getMessage", "getCause", "getSimpleName", "getType", "getAnnotation",
+  "getDeclaredFields", "getDeclaredMethods", "getDeclaredConstructor", "getSuperclass", "getGenericSuperclass",
+  "getComponentType", "getModifiers", "getActualTypeArguments", "getRawType", "getOwnerType", "getUpperBounds",
+  "getLowerBounds", "getGenericComponentType", "getBounds", "getGenericDeclaration", "isInstance", "isAssignableFrom", "newInstance",
+  "cast", "iterator", "hasNext", "entrySet", "keySet", "stream", "intValue", "longValue", "doubleValue", "floatValue",
+  "booleanValue", "charAt", "substring", "toLowerCase", "toUpperCase", "isPresent", "orElse", "ifPresent",
+  "getOrDefault", "putAll", "addAll", "removeAll", "containsKey", "containsValue", "compareTo", "println", "printf",
+  "flush", "ordinal",
 ]);
 
 const TYPE_PARENTS = new Set(["class", "interface", "type"]);
@@ -181,7 +206,12 @@ function resolveImport(imp: ImportDecl, _fromFile: string, ctx: ResolveContext):
     const names =
       cut === segments.length - 1
         ? imp.names
-        : imp.names.map((n) => ({ ...n, imported: n.imported.includes(".") ? `${segments.slice(cut, -1).join(".")}.${n.imported.split(".").pop()}` : inner }));
+        : imp.names.map((n) => ({
+            ...n,
+            imported: n.imported.includes(".")
+              ? `${segments.slice(cut, -1).join(".")}.${n.imported.split(".").pop()}`
+              : inner,
+          }));
     const file = files.find((f) => posixBasename(f) === `${cls}.java`);
     return file ? [{ file, names }] : [{ files, names }];
   }
@@ -201,7 +231,9 @@ function packageOf(root: Node): string | null {
 /** The rest of the package, wherever its files live (main and test trees alike). */
 function ambient(fromFile: string, ctx: ResolveContext): string[] {
   const pkg = ctx.packageOf(fromFile);
-  const files = pkg ? javaFiles(pkg, ctx) : ctx.filesIn(posixDirname(fromFile)).filter((f) => f.endsWith(".java") && !ctx.packageOf(f));
+  const files = pkg
+    ? javaFiles(pkg, ctx)
+    : ctx.filesIn(posixDirname(fromFile)).filter((f) => f.endsWith(".java") && !ctx.packageOf(f));
   return files.filter((f) => f !== fromFile);
 }
 
@@ -214,6 +246,7 @@ export const java: LanguageSpec = {
   selfNames: new Set(["this"]),
   importsAreExports: false,
   implicitSelf: true,
+  commonMembers: COMMON_MEMBERS,
   ignoredNames: BUILTINS,
   classify,
   outer,

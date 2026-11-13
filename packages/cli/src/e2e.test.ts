@@ -39,7 +39,7 @@ describe("vertskim mcp over stdio", () => {
 
   after(async () => {
     await client.close();
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     // The server may still hold the database for a moment after the pipe closes.
     rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
@@ -78,7 +78,7 @@ describe("vertskim mcp over stdio", () => {
   test("graph_overview maps the project", async () => {
     const { text, isError } = await call("graph_overview", {});
     assert.equal(isError, false);
-    assert.match(text, /18 files · 38 symbols · 2 test files/);
+    assert.match(text, /18 files · 39 symbols · 2 test files/);
     assert.match(text, /src\/auth\/ {2}3 files/);
     assert.match(text, /entry points: .*src\/index\.ts/);
     const file = await call("graph_overview", { path: "src/index.ts" });
@@ -98,7 +98,7 @@ describe("vertskim mcp over stdio", () => {
   test("graph_path explains how one node reaches another", async () => {
     const forward = await call("graph_path", { from: "src/index.ts#main", to: "src/auth/tokens.ts#rotate" });
     assert.match(forward.text, /reaches src\/auth\/tokens\.ts#rotate in 4 hops/);
-    assert.match(forward.text, /→ calls → ~src\/auth\/session\.ts#SessionStore\.refresh/);
+    assert.match(forward.text, /→ calls → src\/auth\/session\.ts#SessionStore\.refresh/);
     const backward = await call("graph_path", { from: "src/auth/tokens.ts#rotate", to: "src/index.ts#main" });
     assert.match(backward.text, /does not reach .* The other way round/);
     const part = await call("graph_path", { from: "src/auth/session.ts", to: "src/auth/session.ts#Session" });
@@ -113,7 +113,11 @@ describe("vertskim mcp over stdio", () => {
     assert.doesNotMatch(source.text, /tools\//);
     assert.ok(source.text.length < 1500 * 3.6);
 
-    const names = await call("graph_context", { seeds: ["src/db/redis.ts#RedisClient"], detail: "names", max_tokens: 300 });
+    const names = await call("graph_context", {
+      seeds: ["src/db/redis.ts#RedisClient"],
+      detail: "names",
+      max_tokens: 300,
+    });
     assert.match(names.text, /relevant: src\/db\/redis\.ts#RedisClient \(class\)/);
     assert.ok(names.text.length < 300 * 3.6);
 
@@ -190,7 +194,10 @@ describe("vertskim mcp over stdio", () => {
 
     // The note carries the name of the client that wrote it.
     const node = await call("graph_node", { ids: [id] });
-    assert.match(node.text, /note #1 \(\d{4}-\d\d-\d\d · vertskim-test\): Keep rotation idempotent: retries call it twice\./);
+    assert.match(
+      node.text,
+      /note #1 \(\d{4}-\d\d-\d\d · vertskim-test\): Keep rotation idempotent: retries call it twice\./,
+    );
     const byName = await call("graph_search", { query: "rotate" });
     assert.match(byName.text, /#rotate {2}function[^\n]*\n[^\n]*\n[^\n]*\n {2}note #1/);
     const byWords = await call("graph_search", { query: "idempotent retries" });
@@ -238,13 +245,19 @@ describe("vertskim mcp over stdio", () => {
   });
 
   test("graph_neighbors lists callers and marks guesses", async () => {
-    const { text } = await call("graph_neighbors", {
+    const typed = await call("graph_neighbors", {
       id: "src/auth/session.ts#SessionStore.refresh",
       direction: "in",
       edge_kinds: ["calls"],
     });
-    assert.match(text, /in calls \(2\)/);
-    assert.match(text, /~src\/api\/middleware\.ts#requireAuth/);
+    assert.match(typed.text, /in calls \(2\)/);
+    assert.match(typed.text, /\n {2}src\/api\/middleware\.ts#requireAuth/);
+    const { text } = await call("graph_neighbors", {
+      id: "tools/models.py#Record.label",
+      direction: "in",
+      edge_kinds: ["calls"],
+    });
+    assert.match(text, /~tools\/report\.py#build_report/);
     assert.match(text, /matched by name only/);
   });
 

@@ -69,16 +69,41 @@ describe("indexing the sample project", () => {
   });
 
   test("marks name-only matches as heuristic and skips ambiguous ones", () => {
-    // `store.refresh(token)`: the receiver's type is unknown, one method is called refresh
+    // `record.label()`: nothing says what `record` is, and one method is called label
     assert.equal(
-      edge(project, "src/api/middleware.ts#requireAuth", "calls", "src/auth/session.ts#SessionStore.refresh")?.confidence,
+      edge(project, "tools/report.py#build_report", "calls", "tools/models.py#Record.label")?.confidence,
       "heuristic",
     );
-    // `this.db.fetch(...)`: two methods are called fetch, so no edge is guessed
+    // `record.describe()`: two methods are called describe, so no edge is guessed
     const guesses = project.store.db
-      .prepare("SELECT COUNT(*) AS c FROM edges WHERE src = ? AND dst LIKE '%.fetch'")
-      .get("src/auth/session.ts#BaseStore.loadSession");
+      .prepare("SELECT COUNT(*) AS c FROM edges WHERE src = ? AND dst LIKE '%.describe'")
+      .get("tools/report.py#build_report");
     assert.equal(guesses?.c, 0);
+  });
+
+  test("uses the types written on parameters, fields and variables", () => {
+    // `store.refresh(token)` with `store: SessionStore`
+    assert.equal(
+      edge(project, "src/api/middleware.ts#requireAuth", "calls", "src/auth/session.ts#SessionStore.refresh")
+        ?.confidence,
+      "resolved",
+    );
+    // `this.db.fetch(...)`, where `db` is a constructor parameter property typed as an interface
+    assert.equal(
+      edge(project, "src/auth/session.ts#BaseStore.loadSession", "calls", "src/db/redis.ts#KeyValueStore.fetch")
+        ?.confidence,
+      "resolved",
+    );
+    assert.equal(
+      edge(project, "src/auth/session.ts#BaseStore.loadSession", "calls", "src/db/redis.ts#RedisClient.fetch"),
+      null,
+    );
+    // `const store = new SessionStore(...); store.refresh(...)`
+    assert.equal(
+      edge(project, "tests/session.test.ts#refreshRotatesToken", "calls", "src/auth/session.ts#SessionStore.refresh")
+        ?.confidence,
+      "resolved",
+    );
   });
 
   test("resolves Python relative imports, aliases, module imports and super()", () => {
@@ -88,7 +113,9 @@ describe("indexing the sample project", () => {
     assert.ok(edge(project, "tools/report.py#load_records", "calls", "tools/models.py#WeightedRecord"));
     assert.ok(edge(project, "tools/models.py#WeightedRecord", "extends", "tools/models.py#Record"));
     assert.ok(edge(project, "tools/models.py#WeightedRecord.describe", "calls", "tools/models.py#Record.describe"));
-    assert.ok(edge(project, "tools/models.py#WeightedRecord.describe", "calls", "tools/models.py#WeightedRecord.scaled"));
+    assert.ok(
+      edge(project, "tools/models.py#WeightedRecord.describe", "calls", "tools/models.py#WeightedRecord.scaled"),
+    );
     assert.ok(edge(project, "tools/report.py", "imports", "ext:py/json"));
     assert.ok(edge(project, "tools/tests/test_report.py", "tests", "tools/report.py"));
   });
@@ -243,5 +270,47 @@ describe("incremental sync", () => {
     assert.equal(project.node("tools/tests/test_report.py"), null);
     assert.ok(project.node("tools/report.py"));
     await project.close();
+  });
+
+  test("skips vendored and generated code by default, unless asked to include it", async () => {
+    const root = copyFixture();
+    write(root, "vendor/github.com/acme/lib/lib.go", "package lib\n\nfunc Helper() {}\n", 1);
+    write(root, "src/legacy.min.js", "function a(b){return b}\n", 1);
+    write(root, "src/index.js.map", '{"version":3}\n', 1);
+    write(root, ".svelte-kit/output/app.js", "export function app() {}\n", 1);
+    const project = Project.open({ root, dataDir: tempDir("data") });
+    try {
+      await project.sync();
+      for (const path of [
+        "vendor/github.com/acme/lib/lib.go",
+        "src/legacy.min.js",
+        "src/index.js.map",
+        ".svelte-kit/output/app.js",
+      ]) {
+        assert.equal(project.node(path), null, path);
+      }
+      write(root, ".vertskimignore", "!vendor/\n", 2);
+      await project.sync();
+      assert.ok(project.node("vendor/github.com/acme/lib/lib.go#Helper"));
+    } finally {
+      await project.close();
+    }
+  });
+});
+
+describe("text quoted from the project", () => {
+  test("loses its control characters before it is stored or shown", async () => {
+    const root = copyFixture();
+    write(root, "src/colour.ts", "/** Prints \u001b[31mred\u001b[0m text. */\nexport function colour(): void {}\n", 1);
+    const project = Project.open({ root, dataDir: tempDir("data") });
+    try {
+      await project.sync();
+      const doc = project.node("src/colour.ts#colour")?.doc ?? "";
+      assert.equal(doc, "Prints \u241b[31mred\u241b[0m text.");
+      const note = project.addNote("src/colour.ts#colour", "a \u0007 bell and a \u009b CSI", "test");
+      assert.equal(note.text, "a \u2407 bell and a \ufffd CSI");
+    } finally {
+      await project.close();
+    }
   });
 });

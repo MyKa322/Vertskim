@@ -1,8 +1,27 @@
 import { basename } from "node:path";
-import { EDGE_KINDS, type ContextItem, type DirSummary, type GraphNode, type ImpactedNode, type Project } from "@vertskim/core";
+import {
+  EDGE_KINDS,
+  MAX_REACH,
+  type ContextItem,
+  type DirSummary,
+  type GraphNode,
+  type ImpactedNode,
+  type Project,
+} from "@vertskim/core";
 import { z } from "zod";
 import { defineTool, maxTokens, notFound, type ToolSpec } from "./define.js";
-import { briefFacts, Budget, estimateTokens, kindLabel, lineRange, mark, noteLine, numberLines, statusLine } from "./format.js";
+import {
+  briefFacts,
+  Budget,
+  estimateTokens,
+  kindLabel,
+  lineRange,
+  mark,
+  noteLine,
+  numberLines,
+  statusLine,
+  syntaxErrorLine,
+} from "./format.js";
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
@@ -23,7 +42,8 @@ function resolveAll(project: Project, ids: string[], budget: Budget): GraphNode[
 
 function inside(outer: GraphNode, inner: GraphNode): boolean {
   if (outer.id === inner.id) return true;
-  if (outer.kind === "directory") return outer.path === "" ? inner.kind !== "external" : inner.id.startsWith(outer.path);
+  if (outer.kind === "directory")
+    return outer.path === "" ? inner.kind !== "external" : inner.id.startsWith(outer.path);
   if (outer.kind === "file") return inner.path === outer.id;
   if (outer.kind === "class" || outer.kind === "interface") return inner.id.startsWith(`${outer.id}.`);
   return false;
@@ -100,11 +120,14 @@ const graphOverview = defineTool({
         if (!budget.add(`  ${hub.node.id}  imported by ${hub.importers}`)) break;
       }
     }
-    const hubSymbols = map.hubSymbols.filter((h, i) => h.dependents > 1 || i < 3);
+    const hubSymbols = map.hubSymbols.filter((h, i) => h.reach > 1 || i < 3);
     if (hubSymbols.length > 0) {
-      budget.add("most used symbols:");
+      budget.add("most relied on (directly or through other code):");
       for (const hub of hubSymbols) {
-        if (!budget.add(`  ${hub.node.id}  ${kindLabel(hub.node)} · used by ${hub.dependents}`)) break;
+        const reach = hub.reach >= MAX_REACH ? `${MAX_REACH}+` : String(hub.reach);
+        const uses =
+          hub.reach > hub.dependents ? `used by ${hub.dependents}, ${reach} in all` : `used by ${hub.dependents}`;
+        if (!budget.add(`  ${hub.node.id}  ${kindLabel(hub.node)} · ${uses}`)) break;
       }
     }
     if (map.externals.length > 0) {
@@ -115,7 +138,9 @@ const graphOverview = defineTool({
     }
     const notes = project
       .listNotes()
-      .filter((n) => !n.orphaned && (scope.path === "" ? !n.nodeId.startsWith("ext:") : n.nodeId.startsWith(scope.path)));
+      .filter(
+        (n) => !n.orphaned && (scope.path === "" ? !n.nodeId.startsWith("ext:") : n.nodeId.startsWith(scope.path)),
+      );
     if (notes.length > 0) {
       budget.add(`notes left here (${notes.length}), newest first; graph_annotate lists them all:`);
       for (const note of notes.slice(0, 4)) {
@@ -154,7 +179,7 @@ const graphImpact = defineTool({
       .array(z.string().min(1))
       .min(1)
       .max(20)
-      .describe("Ids of the files or symbols being changed, e.g. [\"src/auth/tokens.ts#rotate\"]."),
+      .describe('Ids of the files or symbols being changed, e.g. ["src/auth/tokens.ts#rotate"].'),
     depth: z.number().int().min(1).max(5).default(3).describe("Hops of dependents to follow. Default 3."),
     include_tests: z.boolean().default(true).describe("Include test code and list tests to run. Default true."),
     max_tokens: maxTokens(2000),
@@ -216,7 +241,9 @@ const graphImpact = defineTool({
     }
     if (result.docs.length > 0) {
       const names = [...new Set(result.docs.map((d) => d.node.id))];
-      budget.add(`docs that refer to it (${names.length}): ${names.slice(0, 10).join(", ")}${names.length > 10 ? ", …" : ""}`);
+      budget.add(
+        `docs that refer to it (${names.length}): ${names.slice(0, 10).join(", ")}${names.length > 10 ? ", …" : ""}`,
+      );
     }
     budget.push(statusLine(project));
     return budget.toString();
@@ -229,15 +256,15 @@ const graphPath = defineTool({
   name: "graph_path",
   title: "Connect two nodes",
   description:
-    "Shortest chain of relationships between two nodes. Answers \"how does A reach B\" and \"why does A depend on " +
-    "B\". If A does not reach B, reports whether B reaches A, or how the two are otherwise connected.",
+    'Shortest chain of relationships between two nodes. Answers "how does A reach B" and "why does A depend on ' +
+    'B". If A does not reach B, reports whether B reaches A, or how the two are otherwise connected.',
   shape: {
     from: z.string().min(1).describe("Id of the node the chain starts at."),
     to: z.string().min(1).describe("Id of the node the chain should arrive at."),
     edge_kinds: z
       .array(z.enum(EDGE_KINDS))
       .optional()
-      .describe("Only follow these relationships. Default: all except \"contains\"."),
+      .describe('Only follow these relationships. Default: all except "contains".'),
     max_hops: z.number().int().min(1).max(12).default(6).describe("Longest chain to look for. Default 6."),
   },
   ids: (args) => [args.from, args.to],
@@ -318,9 +345,7 @@ function suffixInFile(node: GraphNode): string {
 
 function signatureLine(node: GraphNode, seed: boolean): string {
   const what =
-    node.kind === "file"
-      ? `${node.endLine ?? 0} lines`
-      : (node.signature ?? `${kindLabel(node)} ${node.name}`);
+    node.kind === "file" ? `${node.endLine ?? 0} lines` : (node.signature ?? `${kindLabel(node)} ${node.name}`);
   const doc = node.doc ? ` — ${node.doc}` : "";
   const range = node.kind === "file" ? "" : `  ${lineRange(node)}`;
   return `${suffixInFile(node)}${range}  ${what}${doc}${seed ? "  [start]" : ""}`;
@@ -333,7 +358,7 @@ const graphContext = defineTool({
     "Assemble the most relevant code for a task within a token budget. Finds starting points from the task text " +
     "and/or seed ids, spreads out along calls, references and inheritance, and returns the closest symbols in most " +
     "detail. Use at the start of a coding or debugging task instead of opening files one by one. " +
-    "detail \"source\" includes the code of the core symbols.",
+    'detail "source" includes the code of the core symbols.',
   shape: {
     task: z
       .string()
@@ -344,7 +369,9 @@ const graphContext = defineTool({
     detail: z
       .enum(["names", "signatures", "source"])
       .default("signatures")
-      .describe("\"names\": ids only. \"signatures\" (default): signature and doc line. \"source\": code for the core symbols, signatures for the rest."),
+      .describe(
+        '"names": ids only. "signatures" (default): signature and doc line. "source": code for the core symbols, signatures for the rest.',
+      ),
     max_tokens: maxTokens(4000),
   },
   ids: (args) => args.seeds ?? [],
@@ -358,7 +385,18 @@ const graphContext = defineTool({
       budget.push(statusLine(project));
       return budget.toString();
     }
-    budget.push(`starting points: ${result.seeds.slice(0, 8).map((n) => n.id).join(", ")}`);
+    budget.push(
+      `starting points: ${result.seeds
+        .slice(0, 8)
+        .map((n) => n.id)
+        .join(", ")}`,
+    );
+    if (result.weakStart) {
+      budget.push(
+        "These match only a few words of the task, so what follows is a broad guess. Name a symbol or file, " +
+          "pass seeds, or look one up with graph_search first.",
+      );
+    }
     context.trace?.(result.items.slice(0, 12).map((item) => item.node.id));
 
     // What earlier sessions wrote about this code comes first: it is short and it is why notes exist.
@@ -391,7 +429,9 @@ const graphContext = defineTool({
     const overlaps = (node: GraphNode, mode: "within" | "contains"): boolean => {
       if (!node.startLine || !node.endLine) return false;
       return (shownRanges.get(node.path) ?? []).some(([start, end]) =>
-        mode === "within" ? node.startLine! >= start && node.endLine! <= end : start >= node.startLine! && end <= node.endLine!,
+        mode === "within"
+          ? node.startLine! >= start && node.endLine! <= end
+          : start >= node.startLine! && end <= node.endLine!,
       );
     };
     const fileCache = new Map<string, string[] | null>();
@@ -480,7 +520,7 @@ const graphContext = defineTool({
       }
     }
     if (args.detail !== "source" && byFile.size > 0) {
-      budget.add("Ids are the file path plus the shown suffix. Use graph_node with include [\"source\"] to read one.");
+      budget.add('Ids are the file path plus the shown suffix. Use graph_node with include ["source"] to read one.');
     }
     budget.push(statusLine(project));
     return budget.toString();
@@ -519,8 +559,20 @@ const graphSync = defineTool({
         ? "File changes are picked up automatically as they happen."
         : "No file watcher is available here, so the project is re-scanned before each query.",
     ];
-    const verified = project.compilerIndexes().reduce((sum, index) => sum + index.filesInUse, 0);
+    const broken = project.status().syntaxErrors;
+    if (broken.length > 0) {
+      lines.push(`Files with syntax errors (${broken.length}):`);
+      for (const error of broken.slice(0, 20)) lines.push(`  ${error.path}: ${syntaxErrorLine(error)}`);
+      if (broken.length > 20) lines.push(`  … ${broken.length - 20} more`);
+    }
+    const indexes = project.compilerIndexes();
+    const verified = indexes.reduce((sum, index) => sum + index.filesInUse, 0);
     if (verified > 0) lines.push(`Relationships in ${plural(verified, "file")} come from a compiler index.`);
+    for (const index of indexes.filter((i) => !i.inUse)) {
+      lines.push(
+        `A compiler index was found at ${index.path} but is not used until the user runs \`vertskim scip ${index.path}\`.`,
+      );
+    }
     const meaning = project.embeddingStatus();
     if (meaning.enabled) {
       lines.push(

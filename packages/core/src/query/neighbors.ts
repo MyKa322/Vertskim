@@ -58,7 +58,10 @@ export function memberCondition(root: GraphNode, alias: string): { sql: string; 
   if (root.kind === "file") return { sql: `${alias}.path = ?`, params: [root.id] };
   if (root.kind === "class" || root.kind === "interface") {
     const prefix = `${root.id}.`;
-    return { sql: `(${alias}.id = ? OR (${alias}.id >= ? AND ${alias}.id < ?))`, params: [root.id, prefix, prefixEnd(prefix)] };
+    return {
+      sql: `(${alias}.id = ? OR (${alias}.id >= ? AND ${alias}.id < ?))`,
+      params: [root.id, prefix, prefixEnd(prefix)],
+    };
   }
   return { sql: `${alias}.id = ?`, params: [root.id] };
 }
@@ -92,7 +95,16 @@ export function neighbors(store: GraphStore, root: GraphNode, options: NeighborO
       }
       return;
     }
-    found.set(key, { node, kind, direction: dir, depth: hop, confidence, weight, via, line: (row.e_line as number | null) ?? null });
+    found.set(key, {
+      node,
+      kind,
+      direction: dir,
+      depth: hop,
+      confidence,
+      weight,
+      via,
+      line: (row.e_line as number | null) ?? null,
+    });
   };
 
   // ---- hop 1, with roll-up

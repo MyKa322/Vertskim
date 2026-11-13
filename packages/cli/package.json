@@ -2,14 +2,26 @@
   "name": "vertskim",
   "version": "0.1.0",
   "description": "Local MCP server that maps a project as a queryable knowledge graph",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "knowledge-graph",
+    "code-graph",
+    "code-search",
+    "ai-assistant"
+  ],
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "vertskim": "dist/index.js"
+    "vertskim": "dist/bin.js"
   },
   "files": [
     "dist",
     "!dist/**/*.test.*"
   ],
+  "engines": {
+    "node": ">=22.16"
+  },
   "dependencies": {
     "@vertskim/core": "0.1.0",
     "@vertskim/mcp": "0.1.0",

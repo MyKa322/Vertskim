@@ -38,7 +38,12 @@ describe("targeted sync", () => {
     assert.deepEqual(dump(project), await freshDump(root));
 
     // a directory appears with files in it, another is renamed, a third is deleted
-    write(root, "src/jobs/cleanup.ts", 'import { now } from "../utils/clock.js";\nexport const startedAt = now();\n', 2);
+    write(
+      root,
+      "src/jobs/cleanup.ts",
+      'import { now } from "../utils/clock.js";\nexport const startedAt = now();\n',
+      2,
+    );
     renameSync(join(root, "docs"), join(root, "guide"));
     rmSync(join(root, "tools"), { recursive: true });
     result = await project.sync({ paths: ["src/jobs", "docs", "guide", "tools"] });
@@ -125,15 +130,18 @@ describe("watching", () => {
       }
     };
 
-    writeFileSync(join(root, "src/utils/clock.ts"), "export function now(): number {\n  return Date.now();\n}\n");
-    await eventually("new file indexed", () => project.node("src/utils/clock.ts#now") !== null);
-    assert.ok(synced.length >= 2);
+    try {
+      // A node is written before its sync has finished linking and reported, so wait for both.
+      writeFileSync(join(root, "src/utils/clock.ts"), "export function now(): number {\n  return Date.now();\n}\n");
+      await eventually("new file indexed", () => synced.length >= 2 && project.node("src/utils/clock.ts#now") !== null);
 
-    rmSync(join(root, "src/utils/clock.ts"));
-    await eventually("deleted file dropped", () => project.node("src/utils/clock.ts") === null);
-    await project.sync();
-    assert.deepEqual(dump(project), await freshDump(root));
-    await project.close();
+      rmSync(join(root, "src/utils/clock.ts"));
+      await eventually("deleted file dropped", () => project.node("src/utils/clock.ts") === null);
+      await project.sync();
+      assert.deepEqual(dump(project), await freshDump(root));
+    } finally {
+      await project.close();
+    }
   });
 
   test("a query about a file sees an edit made a moment earlier", async (t) => {
