@@ -5,6 +5,7 @@ import { csharp } from "./languages/csharp.js";
 import { go } from "./languages/go.js";
 import { java } from "./languages/java.js";
 import { javascript, tsx, typescript } from "./languages/javascript.js";
+import { lua, luau } from "./languages/luau.js";
 import { php } from "./languages/php.js";
 import { python } from "./languages/python.js";
 import { ruby } from "./languages/ruby.js";
@@ -13,7 +14,7 @@ import { extractMarkdown } from "./markdown.js";
 import type { LanguageSpec } from "./spec.js";
 
 /** Bump when extraction output changes, so existing databases are re-indexed. */
-export const EXTRACTOR_VERSION = 6;
+export const EXTRACTOR_VERSION = 7;
 
 /** Files larger than this get a node but are not parsed. */
 export const MAX_PARSE_BYTES = 1_500_000;
@@ -31,6 +32,8 @@ const SPECS: Record<string, LanguageSpec> = {
   cpp,
   ruby,
   php,
+  luau,
+  lua,
 };
 
 /** Languages whose files are parsed, for status output and documentation. */

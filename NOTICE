@@ -31,3 +31,9 @@ under their owners' terms. See packages/ui/src/icons/README.md.
 
 The same notice travels with the built 3D view as
 packages/ui/public/THIRD-PARTY-NOTICES.txt.
+
+The Luau WebAssembly grammar (packages/core/grammars/tree-sitter-luau.wasm)
+is the unmodified v1.2.0 release asset from
+https://github.com/tree-sitter-grammars/tree-sitter-luau.
+Copyright (c) 2023 Amaan Qureshi. It is licensed under the MIT License;
+the full notice ships beside it as tree-sitter-luau.LICENSE.

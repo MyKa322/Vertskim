@@ -75,12 +75,17 @@ const CHAIN_TYPES = new Set([
   "nullsafe_member_call_expression",
   "nullsafe_member_access_expression",
   "element_reference",
+  // Luau
+  "function_call",
+  "dot_index_expression",
+  "method_index_expression",
+  "bracket_index_expression",
 ]);
 
 /** Fields naming the member in a member access or call, across the grammars. */
 const MEMBER_FIELDS = ["property", "attribute", "field", "name", "method"];
 /** Fields naming what a member is accessed on. */
-const OBJECT_FIELDS = ["object", "operand", "value", "argument", "expression", "receiver"];
+const OBJECT_FIELDS = ["object", "operand", "value", "argument", "expression", "receiver", "table"];
 /** Nodes a receiver can start from: a plain name, or a PHP `$variable`. */
 const ROOT_TYPES = new Set(["identifier", "variable_name"]);
 
@@ -97,8 +102,9 @@ function firstField(node: Node, fields: string[]): Node | null {
  * `a.B()`, Java's `a.b()`, PHP's `$a->b()`, Ruby's `a.b`. `receiver` is null for a bare call.
  */
 function callParts(node: Node): { receiver: Node | null; member: string } | null {
-  // A call whose callee is a separate node: JS, Python, Go, Rust, C, C++, C#.
-  const callee = node.childForFieldName("function");
+  // A call whose callee is a separate node: JS, Python, Go, Rust, C, C++, C#; Luau calls it the call's name.
+  const callee =
+    node.childForFieldName("function") ?? (node.type === "function_call" ? node.childForFieldName("name") : null);
   if (callee) {
     if (ROOT_TYPES.has(callee.type) || callee.type === "name") return { receiver: null, member: callee.text };
     const member = firstField(callee, MEMBER_FIELDS);
@@ -305,6 +311,8 @@ export async function extractCode(spec: LanguageSpec, path: string, source: stri
     const nodeById = new Map<string, GraphNode>();
     const symbols: SymbolInfo[] = [];
     const ownedNodes: { node: GraphNode; owner: string }[] = [];
+    /** Where the names of the file's types are written. */
+    const typeNameStarts = new Set<number>();
 
     for (const def of sorted) {
       claimed.add(def.nameNode.id);
@@ -368,6 +376,7 @@ export async function extractCode(spec: LanguageSpec, path: string, source: stri
         end: outer.endIndex,
       };
       kept.set(def.node.id, symbol);
+      if (TYPE_KINDS.has(decision.kind)) typeNameStarts.add(def.nameNode.startIndex);
       symbols.push(symbol);
       const node: GraphNode = {
         id,
@@ -395,7 +404,8 @@ export async function extractCode(spec: LanguageSpec, path: string, source: stri
 
     // ---- names exported separately from their definition: `export { a }`, `export default a`
     for (const exp of exportNames) {
-      const symbol = symbols.find((s) => !s.parent && s.name === exp.name);
+      // A file-level name: not a method that merely shares it, written outside its type.
+      const symbol = symbols.find((s) => !s.parent && !s.owner && s.name === exp.name);
       if (!symbol) continue;
       const level = exp.isDefault ? 2 : Math.max(symbol.exported, 1);
       symbol.exported = level as SymbolInfo["exported"];
@@ -428,6 +438,12 @@ export async function extractCode(spec: LanguageSpec, path: string, source: stri
       return candidate;
     };
 
+    /** The type in this file that a method written outside its type belongs to (Go, Rust, Luau). */
+    const ownerOf = (symbol: SymbolInfo): SymbolInfo | null => {
+      const owner = symbol.owner ? symbols.find((s) => s.qname === symbol.owner) : undefined;
+      return owner && TYPE_KINDS.has(owner.kind) ? owner : null;
+    };
+
     // ---- declared types of variables, parameters and fields, by the symbol they are written in
     const hints = new Map<string, Map<string, TypeHint[]>>();
     const typeScopes = new Set(symbols.filter((s) => TYPE_KINDS.has(s.kind)).map((s) => s.id));
@@ -436,10 +452,13 @@ export async function extractCode(spec: LanguageSpec, path: string, source: stri
     const chosen = new Map<string, { scope: string; name: string; index: number; rank: number; types: Set<string> }>();
     for (const hint of rawHints) {
       if (ignored?.has(hint.type) || typeParams.has(hint.type)) continue;
+      // A name that is itself a type (Luau's `local Cart = setmetatable({}, Base)`) is not a value of another.
+      if (typeNameStarts.has(hint.index)) continue;
       let owner = enclosingSymbol(hint.index);
       // A variable is not a scope: `let x: T` at the top of a file is visible to the whole file.
       while (owner && owner.kind === "variable") owner = owner.parent;
-      if (hint.field) while (owner && !TYPE_KINDS.has(owner.kind)) owner = owner.parent;
+      // A field belongs to the type around it, or to the type a method written outside one is a method of.
+      if (hint.field) while (owner && !TYPE_KINDS.has(owner.kind)) owner = owner.parent ?? ownerOf(owner);
       if (hint.field && !owner) continue;
       const scope = owner?.id ?? path;
       const key = `${scope}\u0000${hint.name}\u0000${hint.index}`;
@@ -550,7 +569,8 @@ export async function extractCode(spec: LanguageSpec, path: string, source: stri
         }
         case "cast_expression": {
           // Java and C#: `((WildcardType) t).getUpperBounds()` is a call on a WildcardType.
-          const cast = node.childForFieldName("type");
+          // Luau writes it `(t :: WildcardType)`, the type being the second of two children.
+          const cast = node.childForFieldName("type") ?? (node.namedChildCount === 2 ? node.namedChild(1) : null);
           const text = qualifierText(cast && /^generic_(type|name)$/.test(cast.type) ? cast.namedChild(0) : cast);
           return text && text !== "?" && text !== "super" ? TYPED_PREFIX + text : null;
         }
@@ -566,6 +586,7 @@ export async function extractCode(spec: LanguageSpec, path: string, source: stri
         }
         case "call_expression":
         case "call":
+        case "function_call":
         case "method_invocation":
         case "invocation_expression":
         case "member_call_expression":
@@ -604,6 +625,8 @@ export async function extractCode(spec: LanguageSpec, path: string, source: stri
     const addRef = (kind: RefKind, name: string, qualifier: string | null, at: Node, subject?: string | null) => {
       const subjectId = subject ? `${path}#${subject}` : null;
       const src = subjectId && nodeById.has(subjectId) ? subjectId : (enclosingSymbol(at.startIndex)?.id ?? path);
+      // Types inherit; a file does not. The subject of such a statement is then not something this file defines.
+      if (src === path && (kind === "extends" || kind === "implements")) return;
       const key = `${src}\u0000${kind}\u0000${qualifier ?? ""}\u0000${name}`;
       const existing = refs.get(key);
       if (existing) existing.count++;

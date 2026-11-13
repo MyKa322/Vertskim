@@ -110,6 +110,8 @@ const LANGUAGES: Record<string, string> = {
   cpp: "C++",
   ruby: "Ruby",
   php: "PHP",
+  luau: "Luau",
+  lua: "Lua",
 };
 
 export function languageName(language: string | null | undefined): string | null {

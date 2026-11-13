@@ -1,6 +1,6 @@
 # Known issues
 
-Status on 12 November 2026, after the round of fixes made on top of commit `73ff893`. The first
+Status on 13 November 2026, including local fixes on top of commit `3e0971e`. The first
 version of this list described `73ff893` itself; each item below now says what was done about it,
 what that changed where it could be measured, and what is still open.
 
@@ -21,9 +21,12 @@ of it done), **Open**, or **Your call** (waiting for a decision only you can mak
 - first indexes of `node_modules/three` and of all of `node_modules`, read-only;
 - eight open-source projects in Go, Rust, Java, C#, C++, C, Ruby and PHP, shallow-cloned outside
   the repository and only read;
+- `Sleitnick/RbxUtil`, including 69 Luau files, with no parse errors and a ten-call source audit
+  ([details](docs/luau-validation.md));
 - a real MCP client: Claude Code (`claude -p`) working on this repository through Vertskim;
-- the test suite (138 tests) on Node 26.12, 22.16 and 22.13, the browser tests (6) in Chromium,
-  and `npm run lint`.
+- the current test suite (148 tests) on Node 26.12, 24.0 and 22.16, also with the temporary
+  directory behind a junction, and `npm run lint`. Browser validation is recorded in the
+  [Luau validation notes](docs/luau-validation.md).
 
 ## Summary
 
@@ -58,7 +61,7 @@ of it done), **Open**, or **Your call** (waiting for a decision only you can mak
 | H6  | Dependencies are unaudited, and the parsers come from VS Code's own package | Low      | Partly fixed |
 | N1  | No licence                                                                  | High     | Fixed        |
 | N2  | Never used by a real MCP client                                             | High     | Fixed        |
-| N3  | Not pushed or published                                                     | Medium   | Your call    |
+| N3  | npm packages not published                                                  | Medium   | Your call    |
 | N4  | Languages that are not parsed                                               | Medium   | Fixed        |
 | N5  | Go, Rust, Java and C# tried only on small fixtures                          | Medium   | Improved     |
 | N6  | The optional extras are only partly tried                                   | Low      | Partly fixed |
@@ -67,14 +70,16 @@ of it done), **Open**, or **Your call** (waiting for a decision only you can mak
 
 ### Waiting for your decision
 
-- **N3 and the rest of H3. Not pushed or published.** You chose to keep everything local for
-  now. When the code gets a home, the `author`, `repository`, `homepage` and `bugs` fields can be
-  filled in, each published package needs its own copy of `LICENSE`, and whether `vertskim` is
-  free on npm can be checked.
+- **N3 and the rest of H3. npm publication.** The repository now has a home on GitHub. Before
+  npm publication, fill in package metadata, include each package's copy of `LICENSE`, and
+  check whether `vertskim` is free on npm.
 - **R1, what is left. Other operating systems.** The CI workflow
   (`.github/workflows/ci.yml`: Ubuntu, Windows and macOS with Node 22.16, 24 and 26, plus the
-  browser tests on Linux) runs only once the repository is pushed. Until then nothing has run on
-  macOS, Linux or a case-sensitive file system.
+  browser tests on Linux) has run: at `3e0971e`, all six Linux/Windows jobs passed and the three
+  macOS jobs failed during tests. The logs show `/var` versus `/private/var` path mismatches.
+  Absolute node paths and SCIP index locations now resolve links consistently, with regression
+  tests and a full local run behind a temporary-directory junction. The updated code still
+  needs a CI rerun on the actual macOS runner; local Windows tests do not establish that result.
 - **N6, what is left.** `scip-python` 0.6.8 does not run on Windows (see below); it would need
   Linux, WSL or the CI. The `transformers` provider and embedding models other than
   `nomic-embed-text` have not been tried.
@@ -95,10 +100,11 @@ of it done), **Open**, or **Your call** (waiting for a decision only you can mak
   - Search by meaning keeps all vectors in memory, up to 80,000 (about 240 MB at 768 dimensions).
   - The 3D view builds each picture from a copy of the whole graph in memory.
   - Nothing larger than `node_modules` here (6,447 files) has been indexed.
-- **H6, what is left.** All grammars still come from `@vscode/tree-sitter-wasm`, a package made
+- **H6, what is left.** Most grammars come from `@vscode/tree-sitter-wasm`, a package made
   for VS Code's own use, and some lag behind their languages: MediatR uses a C# 12 collection
   expression (`return [];`) that the bundled C# grammar cannot parse. Kotlin, Swift and others
-  would need grammars from somewhere else.
+  would need grammars from somewhere else. Luau/Lua now use a separately vendored MIT-licensed
+  grammar; see [`packages/core/grammars/README.md`](packages/core/grammars/README.md).
 
 ### Limits of the new work
 
@@ -117,6 +123,12 @@ These are also in the README's list of limits.
   each.
 - **PHP** (N4): `require` and `include` are not followed; `@var` types in doc comments are not
   read.
+- **Luau and Lua:** table-based classes and the usual `__index` inheritance are conventions,
+  not type-checker results. Dynamic require arguments, numeric asset IDs, computed exports
+  and arbitrary metatable effects are not evaluated. Roblox paths are inferred from files and
+  Rojo mappings, without a running data model. Lua shares the Luau parser, with fallbacks for
+  labels and bitwise operators; other Lua 5.4 syntax can still fail. The
+  [validation notes](docs/luau-validation.md) give the tested syntax and limits.
 - **Rust macros** (A14): calls in a macro's arguments are read from its tokens; what a macro
   generates is not seen.
 

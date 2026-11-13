@@ -1,4 +1,15 @@
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,10 +22,27 @@ export const FIXTURE = join(FIXTURES, "sample");
 
 const temps: string[] = [];
 
+/**
+ * A new, empty folder, as a real path. The system's temporary folder is itself a link on
+ * macOS (`/var` into `/private/var`), and a test that is not about links should not
+ * depend on that; {@link linkTo} is for the ones that are.
+ */
 export function tempDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `vertskim-${prefix}-`));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), `vertskim-${prefix}-`)));
   temps.push(dir);
   return dir;
+}
+
+/** A second way to reach a folder: a symbolic link to it. Null where links cannot be made. */
+export function linkTo(dir: string): string | null {
+  const link = join(tempDir("link"), "linked");
+  try {
+    // A junction on Windows, which unlike a symbolic link there needs no special rights.
+    symlinkSync(dir, link, "junction");
+  } catch {
+    return null;
+  }
+  return link;
 }
 
 /** Remove every directory handed out by {@link tempDir}. */

@@ -503,6 +503,9 @@ export class Resolver {
         if (binding) {
           if (binding.files === null) return null;
           if (binding.imported === "*") return resolved(this.exportedFrom(binding.files, ref.name));
+          if (spec.moduleValues && binding.imported === "default") {
+            return resolved(this.moduleMember(binding.files, ref.name, ref.kind === "type"));
+          }
           const owner = this.exportedFrom(binding.files, binding.imported);
           return owner ? resolved(this.member(owner, ref.name, 0)) : null;
         }
@@ -598,20 +601,43 @@ export class Resolver {
     return null;
   }
 
+  /**
+   * What `name` is on a module imported as a value (Luau's `local Shop = require(…)`). As a
+   * type, `Shop.Item` is a type the module's file declares. As a value, `Shop.total` is a
+   * member of what the module returns when that is a named symbol; when it returns a table
+   * put together on the spot, it is one of the file's own symbols that the table lists.
+   */
+  private moduleMember(files: string[], name: string, asType: boolean): GraphNode | null {
+    if (asType) {
+      const type = this.exportedFrom(files, name);
+      return type && TYPE_KINDS.has(type.kind) ? type : null;
+    }
+    const returned = this.exportedFrom(files, "default");
+    if (returned) return this.member(returned, name, 0);
+    const listed = this.exportedFrom(files, name);
+    return listed && listed.exported > 0 ? listed : null;
+  }
+
   /** A class, interface or other named type visible in a file, by plain or `package.Type` name. */
   private typeNamed(name: string, path: string, scope: FileScope, src?: string): GraphNode | null {
+    const spec = specFor(this.files.get(path)?.language);
     let node: GraphNode | null = null;
     const dot = name.indexOf(".");
     if (dot > 0) {
       const binding = scope.bindings.get(name.slice(0, dot));
       const rest = name.slice(dot + 1);
-      if (binding?.files && binding.imported === "*" && !rest.includes("."))
-        node = this.exportedFrom(binding.files, rest);
+      if (binding?.files && !rest.includes(".")) {
+        if (binding.imported === "*") node = this.exportedFrom(binding.files, rest);
+        else if (spec?.moduleValues && binding.imported === "default") {
+          // `Shop.Item`: a type of the module's, or a class the module hands on under that name.
+          node = this.moduleMember(binding.files, rest, true) ?? this.moduleMember(binding.files, rest, false);
+        }
+      }
     } else {
       node = this.visible(name, path, scope);
     }
     if (node && TYPE_KINDS.has(node.kind)) return node;
-    return specFor(this.files.get(path)?.language)?.globalTypes ? this.globalType(name, path, src) : null;
+    return spec?.globalTypes ? this.globalType(name, path, src) : null;
   }
 
   /**
@@ -755,7 +781,9 @@ export class Resolver {
       const binding = scope.bindings.get(receiver);
       if (binding?.files === null) return "external";
       if (binding?.imported === "*") target = this.exportedFrom(binding.files!, name);
-      else {
+      else if (binding && spec.moduleValues && binding.imported === "default") {
+        target = this.moduleMember(binding.files!, name, false);
+      } else {
         const owner = binding
           ? this.exportedFrom(binding.files!, binding.imported)
           : this.typeNamed(receiver, path, scope);
@@ -765,8 +793,10 @@ export class Resolver {
     if (!target) return "unknown";
     // Calling a class makes an instance of it, as in Python.
     if (TYPE_KINDS.has(target.kind)) return target;
-    const returned = returnTypeOf(target.signature ?? null);
+    let returned = returnTypeOf(target.signature ?? null);
     if (!returned) return "unknown";
+    // `): Shop.Cart` names a type through the module it was imported with; the type's own name is the last part.
+    if (specFor(target.language)?.moduleValues) returned = returned.slice(returned.lastIndexOf(".") + 1);
     if (BUILTIN_TYPES.has(returned)) return "external";
     const owner = target.parent ? this.store.getNode(target.parent) : null;
     if (owner && TYPE_KINDS.has(owner.kind) && owner.name === returned) return owner;

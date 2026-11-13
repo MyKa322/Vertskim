@@ -13,7 +13,7 @@ after(removeTempDirs);
  * the relationships that only come out right if that language's scoping rules
  * are followed.
  */
-describe("Go, Rust, Java, C#, C and C++, Ruby and PHP", () => {
+describe("Go, Rust, Java, C#, C and C++, Ruby, PHP and Luau", () => {
   let root: string;
   let project: Project;
   const node = (id: string) => project.node(id);
@@ -172,6 +172,64 @@ describe("Go, Rust, Java, C#, C and C++, Ruby and PHP", () => {
     );
   });
 
+  test("Luau: a table given functions is a class, and a module is what it returns", () => {
+    const shop = "luau/src/shop";
+    const cart = `${shop}/Cart.luau`;
+    const item = `${shop}/Item.luau`;
+    const main = "luau/src/main.server.luau";
+    assert.equal(node(`${cart}#Cart`)?.kind, "class");
+    assert.equal(node(`${cart}#Cart`)?.exported, 2); // return Cart
+    assert.equal(node(`${cart}#Cart~2`), null); // `export type Cart` beside it is the same thing, not a second node
+    assert.equal(node(`${cart}#Cart`)?.doc, "A shopping cart: items, and what they cost together.");
+    assert.equal(node(`${item}#Item`)?.doc, "One line of a cart: a thing and how many of it."); // --[=[ @class Item … ]=]
+    assert.equal(node(`${cart}#Cart.add`)?.signature, "function Cart:add(item: Item.Item): Cart");
+    assert.equal(node(`${cart}#Cart.new`)?.subkind, "static"); // a dot, and no `self`
+    assert.equal(node(`${cart}#Cart.add`)?.subkind, null);
+    assert.equal(node(`${cart}#Cart._audit`)?.exported, 0);
+
+    // `require` by path, by place in the game (the Rojo project says where that is), and by alias (.luaurc).
+    assert.equal(link(cart, "imports", item)?.confidence, "exact");
+    assert.ok(link(cart, "imports", `${shop}/Support/Tax.luau`)); // script.Parent.Support.Tax
+    assert.ok(link(main, "imports", cart)); // ReplicatedStorage.Shop.Cart
+    assert.ok(link(main, "imports", `${shop}/init.luau`)); // ReplicatedStorage.Shop, a folder
+    assert.ok(link(`${shop}/Cart.spec.luau`, "imports", cart)); // @shop/Cart
+    assert.ok(link(`${shop}/Cart.spec.luau`, "tests", cart));
+    // A Roblox service and an installed package are not the project's.
+    assert.ok(link(main, "imports", "ext:roblox/Players"));
+    assert.ok(link(main, "imports", "ext:wally/Signal"));
+    assert.equal(node(`${main}#Players`), null);
+
+    // A metatable's `__index` is the base class, and its methods are found through it.
+    resolved(`${item}#Item`, "extends", `${shop}/Priced.luau#Priced`);
+    resolved(`${item}#Item.label`, "calls", `${shop}/Priced.luau#Priced.describe`); // self:describe()
+    resolved(`${cart}#Cart.total`, "calls", `${cart}#Cart.subtotal`); // self:subtotal()
+    resolved(`${cart}#Cart.add`, "calls", `${item}#Item.label`); // item: Item.Item
+    resolved(`${cart}#Cart.lastLabel`, "calls", `${item}#Item.label`); // self.last, set from that parameter
+    resolved(`${main}#checkout`, "calls", `${cart}#Cart.total`); // cart: Cart.Cart
+    resolved(`${main}#greet`, "calls", `${cart}#Cart.add`); // local cart = Cart.new()
+    // A module that returns a table of its functions, and one that hands other modules on.
+    resolved(`${cart}#Cart.total`, "calls", `${shop}/Support/Tax.luau#withTax`);
+    assert.equal(node(`${shop}/Support/Tax.luau#withTax`)?.exported, 1);
+    assert.equal(node(`${shop}/Support/Tax.luau#round`)?.exported, 0);
+    resolved(`${main}#greet`, "calls", `${item}#Item.new`); // Shop.Item.new()
+    resolved(`${main}#greet`, "calls", "luau/legacy/account.lua#Account.open"); // Lua and Luau share a family
+    // A loop variable has no type: a guess, marked as one.
+    assert.equal(link(`${cart}#Cart.subtotal`, "calls", `${item}#Item.price`)?.confidence, "heuristic");
+    // Nothing is guessed for what is called on a service or on an installed package's value.
+    const fromMain = project.store.db.prepare("SELECT dst FROM edges WHERE src = ? AND kind = 'calls'").all(main);
+    assert.deepEqual(fromMain, []);
+
+    // Lua as it was written before Luau: a global table, a module named with dots.
+    assert.equal(node("luau/legacy/account.lua#Account")?.kind, "class");
+    assert.equal(node("luau/legacy/account.lua#Account")?.language, "lua");
+    assert.ok(link("luau/legacy/account.lua", "imports", "luau/legacy/ledger.lua")); // require("legacy.ledger")
+    resolved("luau/legacy/account.lua#Account.deposit", "calls", "luau/legacy/ledger.lua#M.record");
+    assert.deepEqual(
+      project.status().syntaxErrors.filter((file) => file.path.startsWith("luau/")),
+      [],
+    );
+  });
+
   test("PHP: namespaces are in scope, use imports a class, typed properties settle calls", () => {
     const cart = "php/src/Cart.php";
     assert.equal(node(`${cart}#Cart`)?.doc, "A basket of items.");
@@ -265,13 +323,14 @@ describe("Go, Rust, Java, C#, C and C++, Ruby and PHP", () => {
   });
 
   test("languages keep to themselves", () => {
-    // Every call edge joins two symbols of the same language, C and C++ counting as one: they share headers.
+    // Calls stay in their language family: C/C++ share headers, and Lua/Luau share modules.
     const rows = project.store.db
       .prepare(
         `SELECT a.language AS src, b.language AS dst FROM edges e
          JOIN nodes a ON a.id = e.src JOIN nodes b ON b.id = e.dst
          WHERE e.kind = 'calls' AND a.language != b.language
-           AND NOT (a.language IN ('c', 'cpp') AND b.language IN ('c', 'cpp'))`,
+           AND NOT (a.language IN ('c', 'cpp') AND b.language IN ('c', 'cpp'))
+           AND NOT (a.language IN ('lua', 'luau') AND b.language IN ('lua', 'luau'))`,
       )
       .all();
     assert.deepEqual(rows, []);
@@ -304,6 +363,80 @@ describe("Go, Rust, Java, C#, C and C++, Ruby and PHP", () => {
     assert.equal(link("go/cmd/shop/main.go", "imports", "go/internal/cart/"), null);
     assert.ok(link("go/cmd/shop/main.go", "imports", "ext:go/example.com/shop/internal"));
   });
+
+  test("Luau: a module that appears later is found by those already asking for it", async () => {
+    const shop = "luau/src/shop";
+    const coupon = `${shop}/Coupon.luau`;
+    write(
+      root,
+      coupon,
+      'local Discount = require("./Support/Discount")\n\nlocal function apply(cents: number): number\n\treturn Discount.off(cents)\nend\n\nreturn { apply = apply }\n',
+      3,
+    );
+    await project.sync();
+    assert.equal(link(coupon, "imports", `${shop}/Support/Discount/init.luau`), null);
+
+    // A folder with an `init` file is a module by the folder's name.
+    write(
+      root,
+      `${shop}/Support/Discount/init.luau`,
+      "local Discount = {}\n\nfunction Discount.off(cents: number): number\n\treturn cents // 10\nend\n\nreturn Discount\n",
+      3,
+    );
+    const added = await project.sync();
+    assert.ok(added.resolvedFiles < 12, `re-linked ${added.resolvedFiles} files`);
+    assert.ok(link(coupon, "imports", `${shop}/Support/Discount/init.luau`));
+    resolved(`${coupon}#apply`, "calls", `${shop}/Support/Discount/init.luau#Discount.off`);
+  });
+});
+
+describe("Luau import configuration", () => {
+  test("replaces old resolutions when aliases or the Rojo tree change or disappear", async () => {
+    const root = tempDir("luau-config");
+    for (const folder of ["first", "second"]) {
+      write(root, `${folder}/Item.luau`, "local Item = {}\nfunction Item.new() return {} end\nreturn Item\n", 1);
+    }
+    write(
+      root,
+      "main.luau",
+      'local Alias = require("@items/Item")\nlocal Game = require(game.ReplicatedStorage.Shared.Item)\nlocal function fromAlias() return Alias.new() end\nlocal function fromGame() return Game.new() end\nreturn { fromAlias = fromAlias, fromGame = fromGame }\n',
+      1,
+    );
+    const alias = (folder: string, tick: number) =>
+      write(root, ".luaurc", JSON.stringify({ aliases: { items: folder } }), tick);
+    const rojo = (folder: string, tick: number) =>
+      write(
+        root,
+        "game.project.json",
+        JSON.stringify({ tree: { ReplicatedStorage: { Shared: { $path: folder } } } }),
+        tick,
+      );
+    alias("first", 1);
+    rojo("first", 1);
+    const project = Project.open({ root, dataDir: tempDir("data") });
+    const called = (name: string, folder: string) =>
+      edge(project, `main.luau#${name}`, "calls", `${folder}/Item.luau#Item.new`);
+    try {
+      await project.sync();
+      assert.equal(called("fromAlias", "first")?.confidence, "resolved");
+      assert.equal(called("fromGame", "first")?.confidence, "resolved");
+      alias("second", 2);
+      await project.sync({ paths: [".luaurc"] });
+      assert.equal(called("fromAlias", "first"), null);
+      assert.equal(called("fromAlias", "second")?.confidence, "resolved");
+      rojo("second", 2);
+      await project.sync({ paths: ["game.project.json"] });
+      assert.equal(called("fromGame", "first"), null);
+      assert.equal(called("fromGame", "second")?.confidence, "resolved");
+      rmSync(join(root, ".luaurc"));
+      rmSync(join(root, "game.project.json"));
+      await project.sync({ paths: [".luaurc", "game.project.json"] });
+      assert.equal(called("fromAlias", "second"), null);
+      assert.equal(called("fromGame", "second"), null);
+    } finally {
+      await project.close();
+    }
+  });
 });
 
 describe("test files are recognised by each language's convention", () => {
@@ -315,5 +448,8 @@ describe("test files are recognised by each language's convention", () => {
     assert.equal(classifyFile("src/parser_test.rs"), "test");
     assert.equal(classifyFile("tests/integration.rs"), "test");
     assert.equal(classifyFile("src/account.rs"), "source");
+    assert.equal(classifyFile("src/shop/Cart.spec.luau"), "test");
+    assert.equal(classifyFile("src/shop/Cart.test.lua"), "test");
+    assert.equal(classifyFile("src/shop/Cart.server.luau"), "source");
   });
 });

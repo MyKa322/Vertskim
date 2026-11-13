@@ -176,8 +176,10 @@ ls node_modules/@vscode/tree-sitter-wasm/wasm/
 ```
 
 At the time of writing that is bash, c-sharp, cpp, css, go, ini, java, javascript, php, powershell,
-python, regex, ruby, rust, tsx and typescript. If your language is there, carry on. If it is not
-(Kotlin, Swift, Lua, Dart…), the grammar has to come from somewhere else, and
+python, regex, ruby, rust, tsx and typescript. Luau and Lua use a separately vendored grammar;
+its source, version, checksum and licence are recorded in
+[`packages/core/grammars/README.md`](packages/core/grammars/README.md).
+If your language is there, carry on. If it is not (Kotlin, Swift, Dart…), the grammar has to come from somewhere else, and
 `packages/core/src/extract/runtime.ts` has to learn to find it. **Open an issue first**: where
 grammars come from is a decision about dependencies, and it is better made once than per language.
 

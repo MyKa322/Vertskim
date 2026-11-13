@@ -1,0 +1,7 @@
+{
+  "languageMode": "strict",
+  // `require("@shop/Cart")` from anywhere in the project.
+  "aliases": {
+    "shop": "src/shop",
+  }
+}

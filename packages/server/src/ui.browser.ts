@@ -108,6 +108,32 @@ describe("the 3D view in a browser", () => {
     await page.context().close();
   });
 
+  test("shows Luau's name, file icon and highlighted source", async () => {
+    const path = "src/greeting.luau";
+    writeFileSync(
+      join(root, path),
+      "--[=[ A greeting. ]=]\nlocal message = [=[hello]=]\nexport type Greeting = string\nlocal function greet(): string\n  return `message: {message}`\nend\nreturn greet\n",
+    );
+    await project.sync();
+    const { page, errors } = await open(server.link(path));
+    const details = page.getByRole("complementary", { name: "Selected node" });
+    await details.locator("code", { hasText: path }).waitFor();
+    await details.locator(".hero-facts", { hasText: "Luau" }).waitFor();
+    await details.locator(".tok-keyword", { hasText: /^export$/ }).waitFor();
+    await details.locator(".tok-comment", { hasText: "A greeting." }).waitFor();
+    await details.locator(".tok-string", { hasText: "[=[hello]=]" }).waitFor();
+    await details.locator(".tok-string", { hasText: "message: {message}" }).waitFor();
+    const tree = page.getByRole("tree", { name: "Files of the project" });
+    // Opening a link to this file may already have expanded its folder.
+    if ((await tree.locator(`button[title="${path}"]`).count()) === 0) {
+      await tree.locator('button[title="src/"]').click();
+    }
+    const icon = tree.locator(`button[title="${path}"] img`);
+    assert.match((await icon.getAttribute("src")) ?? "", /^blob:/);
+    assert.deepEqual(errors, []);
+    await page.context().close();
+  });
+
   test("keeps a note written in the page", async () => {
     const { page, errors } = await open(server.link(SESSION));
     const details = page.getByRole("complementary", { name: "Selected node" });

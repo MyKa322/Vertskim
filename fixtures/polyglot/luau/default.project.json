@@ -1,0 +1,13 @@
+{
+  "name": "shop",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "Shop": { "$path": "src/shop" },
+      "Packages": { "$path": "Packages" }
+    },
+    "ServerScriptService": {
+      "Main": { "$path": "src/main.server.luau" }
+    }
+  }
+}

@@ -1,9 +1,9 @@
 import { readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { GraphStore } from "../store/store.js";
 import type { EdgeKind, GraphNode, ScipFact } from "../types.js";
-import { decodeText, posixJoin, toPosix } from "../util.js";
+import { decodeText, pathInside, posixJoin, realPath, toPosix } from "../util.js";
 import {
   ENCODING_UTF32,
   ENCODING_UTF8,
@@ -107,10 +107,14 @@ interface Target {
   viaType: boolean;
 }
 
-function sameOrInside(root: string, path: string): string | null {
-  const rel = relative(root, path);
-  if (rel.startsWith("..") || isAbsolute(rel)) return null;
-  return toPosix(rel);
+/**
+ * The one spelling an index file is known by: its folder as a real path, like the project
+ * root, so that a file reached through a link is the same file. The name itself is kept,
+ * so an index that is a link stays where it was put.
+ */
+function canonical(path: string): string {
+  const abs = resolve(path);
+  return join(realPath(dirname(abs)), basename(abs));
 }
 
 /** Position of an offset in a line as a JavaScript string index. */
@@ -247,7 +251,8 @@ export class ScipIndexes {
   private listed(): string[] {
     try {
       const parsed = JSON.parse(readFileSync(this.configPath, "utf8")) as { sources?: unknown };
-      return Array.isArray(parsed.sources) ? parsed.sources.filter((s): s is string => typeof s === "string") : [];
+      if (!Array.isArray(parsed.sources)) return [];
+      return [...new Set(parsed.sources.filter((s): s is string => typeof s === "string").map(canonical))];
     } catch {
       return [];
     }
@@ -259,7 +264,7 @@ export class ScipIndexes {
 
   /** Use this index file from now on. */
   add(path: string): string {
-    const abs = resolve(path);
+    const abs = canonical(path);
     statSync(abs); // throws a clear error when it is not there
     const listed = this.listed();
     if (!listed.includes(abs)) this.save([...listed, abs]);
@@ -269,7 +274,7 @@ export class ScipIndexes {
 
   /** Stop using an index file. Returns false when it was not listed. */
   forget(path: string): boolean {
-    const abs = resolve(path);
+    const abs = canonical(path);
     const listed = this.listed();
     if (!listed.includes(abs)) return false;
     this.save(listed.filter((s) => s !== abs));
@@ -356,13 +361,14 @@ export class ScipIndexes {
   private baseDir(indexPath: string, projectRoot: string): string | null {
     if (projectRoot.startsWith("file:")) {
       try {
-        const inside = sameOrInside(this.root, fileURLToPath(projectRoot));
+        // Indexers record the folder as it was spelled when they ran, which may be through a link.
+        const inside = pathInside(this.root, realPath(fileURLToPath(projectRoot)));
         if (inside !== null) return inside;
       } catch {
         // a URI from another machine or operating system: fall back to where the index file is
       }
     }
-    return sameOrInside(this.root, dirname(indexPath));
+    return pathInside(this.root, dirname(indexPath));
   }
 
   private import(indexPath: string, stat: { size: number; mtimeMs: number }): string[] {

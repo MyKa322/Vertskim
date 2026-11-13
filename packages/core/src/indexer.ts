@@ -10,11 +10,11 @@ import { countLines, decodeText, posixBasename, posixDirname, sha1, toPosix, yie
 const FULL_RESOLVE_THRESHOLD = 500;
 const FILES_PER_TICK = 16;
 /** Files that say how imports map to directories; a change to one re-links the whole project. */
-const MANIFESTS = new Set(["package.json", "go.mod", "Cargo.toml", "composer.json"]);
+const MANIFESTS = new Set(["package.json", "go.mod", "Cargo.toml", "composer.json", ".luaurc"]);
 
 function isManifest(path: string): boolean {
   const name = posixBasename(path);
-  return MANIFESTS.has(name) || /^[jt]sconfig(\..+)?\.json$/.test(name);
+  return MANIFESTS.has(name) || /^[jt]sconfig(\..+)?\.json$/.test(name) || name.endsWith(".project.json");
 }
 
 export interface IndexProgress {
@@ -284,7 +284,10 @@ export class Indexer {
     const base = posixBasename(path);
     const dot = base.indexOf(".");
     let stem = dot > 0 ? base.slice(0, dot) : base;
-    if (stem === "index" || stem === "__init__") stem = posixBasename(posixDirname(path)) || stem;
+    // A file that stands for its folder is imported by the folder's name (Luau's `init.luau` too).
+    if (stem === "index" || stem === "__init__" || (stem === "init" && /\.luau?$/.test(base))) {
+      stem = posixBasename(posixDirname(path)) || stem;
+    }
     const like = (text: string) => `%${text.replace(/[\\%_]/g, "\\$&")}%`;
     const out = new Set<string>();
     for (const row of this.store

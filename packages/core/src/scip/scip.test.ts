@@ -3,7 +3,7 @@ import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
 import { Project } from "../project.js";
-import { copyFixture, edge, removeTempDirs, tempDir, write } from "../testing/helpers.js";
+import { copyFixture, edge, linkTo, removeTempDirs, tempDir, write } from "../testing/helpers.js";
 import { encodeScip, FakeIndexBuilder, ROLE_DEFINITION, ROLE_IMPORT } from "../testing/scip.js";
 import { readScip, symbolName, type ScipDocument } from "./reader.js";
 
@@ -475,6 +475,47 @@ describe("compiler-accurate edges from a SCIP index", () => {
       } finally {
         await reopened.close();
       }
+    } finally {
+      await project.close();
+    }
+  });
+
+  test("matches an index made and added through a link to the project", async (t) => {
+    const { root, project } = await openSample();
+    try {
+      const link = linkTo(root);
+      if (!link) {
+        t.skip("links cannot be made here");
+        return;
+      }
+      // The indexer ran in the linked folder, so that is the root it recorded and where it wrote.
+      const file = sampleIndex(link).write(1);
+      const status = await project.addCompilerIndex(file);
+      assert.equal(status?.path, join(root, "index.scip"));
+      assert.equal(status?.matched, 6);
+      assert.equal(status?.filesInUse, 6);
+      assert.equal(edge(project, ID.requireAuth, "calls", ID.refresh)?.confidence, "exact");
+      // One file under two spellings is one index: listed once, and not also "found, not in use".
+      await project.addCompilerIndex(join(root, "index.scip"));
+      assert.deepEqual(
+        project.compilerIndexes().map((s) => [s.path, s.inUse]),
+        [[join(root, "index.scip"), true]],
+      );
+      // Either spelling forgets it.
+      assert.equal(await project.forgetCompilerIndex(file), true);
+      assert.equal(edge(project, ID.requireAuth, "calls", ID.refresh)?.confidence, "resolved");
+      assert.equal(await project.forgetCompilerIndex(join(root, "index.scip")), false);
+
+      // An index kept elsewhere, behind a link of its own.
+      const outside = linkTo(tempDir("scip"));
+      assert.ok(outside);
+      const elsewhere = sampleIndex(link).write(2, join(outside, "sample.scip"));
+      assert.equal((await project.addCompilerIndex(elsewhere))?.filesInUse, 6);
+      assert.equal(await project.forgetCompilerIndex(elsewhere), true);
+
+      // No root recorded in it: its paths are then taken from where the index file is.
+      const bare = sampleIndex(link, { projectRoot: null }).write(3);
+      assert.equal((await project.addCompilerIndex(bare))?.filesInUse, 6);
     } finally {
       await project.close();
     }

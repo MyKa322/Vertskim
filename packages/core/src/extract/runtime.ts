@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type * as TreeSitter from "@vscode/tree-sitter-wasm";
 
 const require = createRequire(import.meta.url);
@@ -21,7 +23,12 @@ export function getRuntime(): Promise<Runtime> {
   return runtimePromise;
 }
 
+/** Grammars that `@vscode/tree-sitter-wasm` does not ship, kept in this package (see `grammars/README.md`). */
+const OWN_GRAMMARS = fileURLToPath(new URL("../../grammars", import.meta.url));
+
 function grammarPath(grammar: string): string {
+  const own = join(OWN_GRAMMARS, `tree-sitter-${grammar}.wasm`);
+  if (existsSync(own)) return own;
   const wasmDir = dirname(require.resolve("@vscode/tree-sitter-wasm"));
   return join(wasmDir, `tree-sitter-${grammar}.wasm`);
 }

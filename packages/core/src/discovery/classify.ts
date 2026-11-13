@@ -30,6 +30,7 @@ const LANGUAGE_BY_EXT: Record<string, string> = {
   ".php": "php",
   ".swift": "swift",
   ".lua": "lua",
+  ".luau": "luau",
   ".sh": "shell",
   ".bash": "shell",
   ".ps1": "powershell",
@@ -61,11 +62,12 @@ const DATA_EXTS = new Set([".csv", ".tsv", ".parquet", ".sqlite", ".db", ".ndjso
 // biome-ignore format: a list of words reads better packed
 const SOURCE_LANGUAGES = new Set([
   "typescript", "tsx", "javascript", "python", "go", "rust", "java", "kotlin", "csharp", "c", "cpp",
-  "ruby", "php", "swift", "lua", "shell", "powershell", "sql", "css", "scss", "html", "vue", "svelte",
+  "ruby", "php", "swift", "lua", "luau", "shell", "powershell", "sql", "css", "scss", "html", "vue", "svelte",
 ]);
 // biome-ignore format: a list of words reads better packed
 const CONFIG_BASENAMES = new Set([
   "dockerfile", "makefile", ".gitignore", ".gitattributes", ".editorconfig", ".npmrc", ".prettierrc", ".eslintrc",
+  ".luaurc",
 ]);
 
 const TEST_PATH = /(^|\/)(tests?|__tests__|spec|specs|e2e)\//i;

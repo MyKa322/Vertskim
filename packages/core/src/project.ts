@@ -17,7 +17,7 @@ import { closeInMeaning, mergeByMeaning, search, type SearchOptions, type Search
 import { ScipIndexes, type ScipSourceStatus } from "./scip/indexes.js";
 import { GraphStore, SCHEMA_VERSION } from "./store/store.js";
 import type { GraphNode, IndexStatus, SyncResult, SyntaxErrorFile } from "./types.js";
-import { decodeText, sha1, stripControl, toPosix } from "./util.js";
+import { decodeText, pathInside, realPath, sha1, stripControl, toPosix } from "./util.js";
 import { withFileLock } from "./watch/lock.js";
 import { watchProject, type WatchHandle } from "./watch/watcher.js";
 
@@ -485,8 +485,8 @@ export class Project {
     let path = hash < 0 ? id : id.slice(0, hash);
     const fragment = hash < 0 ? "" : id.slice(hash);
     if (isAbsolute(path)) {
-      const rel = relative(this.root, path);
-      if (!rel.startsWith("..") && !isAbsolute(rel)) path = rel;
+      // The root is a real path; the id may have come through a link to it (`/tmp` on macOS).
+      path = pathInside(this.root, path) ?? pathInside(this.root, realPath(path)) ?? path;
     }
     path = toPosix(path).replace(/^\.\//, "");
     id = path + fragment;

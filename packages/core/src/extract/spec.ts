@@ -165,6 +165,14 @@ export interface LanguageSpec {
    * file defines them, and may be reopened in several files (Ruby's constants).
    */
   globalTypes?: boolean;
+  /**
+   * True when importing a module binds one name to whatever the module returns (Luau's
+   * `local Cart = require("./cart")`). That is the symbol the module returns when it names
+   * one; when it returns a table put together on the spot, the name stands for the
+   * functions that table lists. The types a module exports are reached through the same
+   * name (`Cart.Item`).
+   */
+  moduleValues?: boolean;
   /** Type and identifier names never worth recording (built-in types). */
   ignoredNames?: Set<string>;
 

@@ -12,7 +12,7 @@ and gets a short, exact answer instead of reading whole files.
 [![Licence: Apache 2.0](https://img.shields.io/badge/licence-Apache%202.0-2a78d6)](LICENSE)
 [![Node 22.16+](https://img.shields.io/badge/node-22.16%2B-3c873a?logo=nodedotjs&logoColor=white)](#quick-start)
 [![MCP: 10 tools](https://img.shields.io/badge/MCP-10%20tools-6250d6)](#the-ten-tools)
-[![11 languages + Markdown](https://img.shields.io/badge/parses-11%20languages%20%2B%20Markdown-eb6834)](#languages)
+[![13 languages + Markdown](https://img.shields.io/badge/parses-13%20languages%20%2B%20Markdown-eb6834)](#languages)
 [![Runs locally](https://img.shields.io/badge/runs-100%25%20on%20your%20machine-1baf7a)](#privacy-where-your-data-goes)
 [![CI](https://github.com/MyKa322/Vertskim/actions/workflows/ci.yml/badge.svg)](https://github.com/MyKa322/Vertskim/actions/workflows/ci.yml)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-008300)](CONTRIBUTING.md)
@@ -44,16 +44,17 @@ what uses what, and answers the assistant's questions from that graph.
 |---|---|
 | **70% to 94% fewer tokens per question** | Measured on this repository with `vertskim bench`; see [Benchmarks](#benchmarks) for what is compared and where it does not help. |
 | **Everything stays on your machine** | No account, no upload, no telemetry. The project is only ever read; the graph lives in your user data folder. |
-| **11 programming languages and Markdown** | TypeScript, JavaScript, Python, Go, Rust, Java, C#, C, C++, Ruby and PHP, each with its own rules for imports, scope and types. |
+| **13 programming languages and Markdown** | TypeScript, JavaScript, Python, Go, Rust, Java, C#, C, C++, Ruby, PHP, Luau and Lua, each with its own rules for imports, scope and types. |
 | **Always current** | Watches the project and re-links only what a change can affect, about a tenth of a second after you save. |
 | **Honest about what it knows** | A relationship matched by name alone is marked `~` as a guess. Add a compiler index and guesses become facts. |
 | **A picture of the project** | A live 3D view in your browser that shows the graph, and what your assistant is looking at. |
 | **Memory between sessions** | Notes the assistant leaves on a function or file come back whenever that code comes up again. |
 
 > [!NOTE]
-> **Status: 0.1.0, built and tested on Windows.** All planned features work and are covered by 138
-> tests plus 6 browser tests. The CI for Linux and macOS is written but has not run yet, and the
-> package is not on npm, so you run it from a checkout. [KNOWN_ISSUES.md](KNOWN_ISSUES.md) says
+> **Status: 0.1.0, built and tested on Windows.** The local suite has 148 tests plus 8 browser
+> tests. CI has run on
+> Linux, Windows and macOS; the macOS path failures have fixes verified locally, pending a CI
+> rerun. The package is not on npm, so you run it from a checkout. [KNOWN_ISSUES.md](KNOWN_ISSUES.md) says
 > exactly what has been tried and what has not.
 
 ## Quick start
@@ -402,6 +403,8 @@ Vertskim works relationships out from syntax, without a type checker. To see how
 | C++ | `.cpp` `.cc` `.hpp` | `google/leveldb` |
 | Ruby | `.rb` | `rack/rack` |
 | PHP | `.php` | `slimphp/Slim` |
+| Luau | `.luau` | `Sleitnick/RbxUtil` (69 Luau files; [results](docs/luau-validation.md)) |
+| Lua | `.lua` | fixtures only; read with the Luau grammar |
 | Markdown | `.md` `.mdx` `.markdown` | this repository |
 
 Every other file still gets a node, so links and mentions can point at it.
@@ -412,7 +415,8 @@ What "parsed" means, beyond finding definitions:
   exports; path aliases from `tsconfig.json` and `package.json`; Go packages and `go.mod`; Rust
   modules and `impl` blocks; Java packages; C# namespaces; C and C++ includes (a call reaches the
   definition in the source file, not the declaration in the header); Ruby's `require` and its
-  global constants; PHP namespaces and `use`.
+  global constants; PHP namespaces and `use`; Luau/Lua `require`, `.luaurc` aliases and Roblox
+  instance paths, using Rojo project mappings where available.
 - **Types settle calls.** The types written on parameters, variables and fields, and what
   `new X()` or a function with a declared return type gives, say which class a `value.method()`
   call belongs to.
@@ -611,6 +615,12 @@ pattern such as `!dist/` in `.vertskimignore`. Symlinks are not followed.
     `x = Foo.new` gives a variable a type.
   - PHP: classes are found through `use` and namespaces; `require` and `include` are not
     followed, on the assumption that an autoloader loads classes.
+  - Luau and Lua: tables given methods are indexed as classes; this is a convention, not a
+    type-checker's result. Dynamic module paths, numeric asset-id requires, computed table
+    exports and metatable behaviour beyond the usual `__index` pattern are not evaluated.
+    Roblox paths use the on-disk layout and Rojo mappings, not a running game. Lua uses the
+    Luau grammar with fallbacks for labels and bitwise operators; this is not full Lua 5.4
+    support. See the [Luau validation notes](docs/luau-validation.md).
 - Kotlin, Swift and other languages without a bundled grammar get a node but are not parsed.
   The bundled grammars can lag behind their languages: a C# 12 collection expression
   (`return [];`) is a syntax error to them.
@@ -703,6 +713,8 @@ Copyright 2026 Vertskim and its contributors.
 
 - [tree-sitter](https://tree-sitter.github.io/) grammars, through
   [`@vscode/tree-sitter-wasm`](https://github.com/microsoft/vscode-tree-sitter-wasm), for parsing
+- The MIT-licensed [Luau grammar](https://github.com/tree-sitter-grammars/tree-sitter-luau),
+  vendored as WASM with its [version, checksum and licence](packages/core/grammars/README.md)
 - The [Model Context Protocol SDK](https://github.com/modelcontextprotocol/typescript-sdk) for the
   tools
 - [three.js](https://threejs.org) and [3d-force-graph](https://github.com/vasturiano/3d-force-graph)

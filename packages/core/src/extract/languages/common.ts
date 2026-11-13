@@ -46,9 +46,15 @@ export function cleanComment(raw: string): string | null {
 /**
  * The comment written directly above a definition. Line comments are joined
  * while they stay adjacent; a block comment stands alone. Sibling nodes of the
- * `skip` types (attributes, annotations) may sit in between.
+ * `skip` types (attributes, annotations) may sit in between. `clean` turns the
+ * comment's text into the doc line, for languages whose markers {@link cleanComment}
+ * does not know.
  */
-export function commentAbove(outer: Node, skip: Set<string> = new Set()): DocInfo {
+export function commentAbove(
+  outer: Node,
+  skip: Set<string> = new Set(),
+  clean: (raw: string) => string | null = cleanComment,
+): DocInfo {
   const comments: Node[] = [];
   let expectedRow = outer.startPosition.row;
   let prev = outer.previousNamedSibling;
@@ -66,7 +72,7 @@ export function commentAbove(outer: Node, skip: Set<string> = new Set()): DocInf
   }
   const first = comments[0];
   if (!first) return { text: null };
-  const text = cleanComment(comments.map((c) => c.text).join("\n"));
+  const text = clean(comments.map((c) => c.text).join("\n"));
   return text ? { text, startLine: first.startPosition.row + 1 } : { text: null };
 }
 

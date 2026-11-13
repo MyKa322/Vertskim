@@ -1,4 +1,34 @@
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+
+/**
+ * A path with its symbolic links followed, so that two spellings of one place compare equal:
+ * on macOS `/tmp` and `/var` are links into `/private`. The part that does not exist (yet, or
+ * any more) is kept as written, below the nearest folder that does.
+ */
+export function realPath(path: string): string {
+  const abs = resolve(path);
+  let current = abs;
+  let rest = "";
+  for (;;) {
+    try {
+      return join(realpathSync(current), rest);
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return abs;
+      rest = join(basename(current), rest);
+      current = parent;
+    }
+  }
+}
+
+/** `path` relative to `root` with forward slashes, or null when it is not inside it. Both absolute. */
+export function pathInside(root: string, path: string): string | null {
+  const rel = relative(root, path);
+  if (rel.startsWith("..") || isAbsolute(rel)) return null;
+  return toPosix(rel);
+}
 
 /**
  * Text of a source file. UTF-8 unless a byte-order mark says otherwise; the

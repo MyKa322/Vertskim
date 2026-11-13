@@ -73,10 +73,10 @@ const GRAMMARS: Record<string, Grammar> = {
       param foreach switch try catch finally throw`),
   },
   lua: {
-    comments: ["--\\[\\[[\\s\\S]*?(?:\\]\\]|$)", "--[^\\n]*"],
-    strings: QUOTES,
+    comments: ["--\\[=*\\[[\\s\\S]*?(?:\\]=*\\]|$)", "--[^\\n]*"],
+    strings: ["\\[=*\\[[\\s\\S]*?(?:\\]=*\\]|$)", ...QUOTES, BACKTICK],
     keywords: set(`local function end if then else elseif for while do repeat until return break in and or not nil true
-      false`),
+      false continue type export typeof const`),
   },
   sql: {
     comments: ["/\\*[\\s\\S]*?(?:\\*/|$)", "--[^\\n]*"],
@@ -114,6 +114,7 @@ const BY_LANGUAGE: Record<string, string> = {
   shell: "shell",
   powershell: "shell",
   lua: "lua",
+  luau: "lua",
   sql: "sql",
   json: "data",
   yaml: "data",

@@ -3,7 +3,7 @@ import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { Project } from "./project.js";
-import { copyFixture, dump, edge, removeTempDirs, snapshot, tempDir, write } from "./testing/helpers.js";
+import { copyFixture, dump, edge, linkTo, removeTempDirs, snapshot, tempDir, write } from "./testing/helpers.js";
 
 after(removeTempDirs);
 
@@ -184,6 +184,30 @@ describe("indexing the sample project", () => {
     assert.equal(project.node(join(root, "src", "index.ts"))?.id, "src/index.ts");
     assert.equal(project.node(".")?.id, "./");
     assert.equal(project.node("src/nope.ts"), null);
+  });
+
+  test("is the same project when reached through a link", async (t) => {
+    const link = linkTo(root);
+    if (!link) {
+      t.skip("links cannot be made here");
+      return;
+    }
+    const linked = Project.open({ root: link, dataDir: tempDir("data") });
+    try {
+      await linked.sync();
+      assert.equal(linked.root, project.root);
+      // An absolute path is understood in either spelling.
+      assert.equal(linked.node(join(link, "src", "index.ts"))?.id, "src/index.ts");
+      assert.equal(linked.node(join(root, "src", "index.ts"))?.id, "src/index.ts");
+      assert.equal(linked.node(`${join(link, "src", "auth", "session.ts")}#SessionStore`)?.kind, "class");
+      assert.equal(linked.node(join(link, "src", "auth"))?.id, "src/auth/");
+      // A file that is not there is still not there, and a path outside the project still is outside.
+      assert.equal(linked.node(join(link, "src", "nope.ts")), null);
+      assert.equal(linked.node(join(link, "..", "elsewhere.ts")), null);
+      assert.deepEqual(dump(linked), dump(project));
+    } finally {
+      await linked.close();
+    }
   });
 
   test("leaves the project directory untouched", () => {

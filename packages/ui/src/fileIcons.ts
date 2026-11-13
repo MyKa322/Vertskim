@@ -156,7 +156,7 @@ const FILE_EXTENSIONS = table(`
   sqlite: sqlite sqlite3
   db: db
   swift: swift
-  lua: lua
+  lua: lua luau
   svg: svg
   image: png jpg jpeg gif webp avif bmp ico tiff
   font: woff woff2 ttf otf eot
@@ -191,7 +191,7 @@ const LANGUAGES = table(`
   ruby: ruby
   php: php
   swift: swift
-  lua: lua
+  lua: lua luau
   shell: shell
   powershell: powershell
   sql: sql
