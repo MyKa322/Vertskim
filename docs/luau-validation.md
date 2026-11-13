@@ -1,6 +1,6 @@
 # Luau support and CI path fixes
 
-Validated on 13 November 2026, on Windows, with local changes based on `3e0971e`.
+Validated on 13 November 2026, locally on Windows and in GitHub Actions at `40a0695`.
 
 ## Checks
 
@@ -12,6 +12,8 @@ Validated on 13 November 2026, on Windows, with local changes based on `3e0971e`
 | Test suite with `TEMP` and `TMP` pointing through a directory junction | 148 passed |
 | `npm run lint` | Passed |
 | Built UI in headless Chromium, Playwright | 8 passed |
+| GitHub Actions: Linux, Windows and macOS, Node 22.16/24/26 | All 9 jobs passed; 148-test suite |
+| GitHub Actions: Chromium on Linux, Node 24 | All 8 browser tests passed |
 | Packed `@vertskim/core`, extracted outside the repository | Luau extraction passed; grammar, licence and provenance included |
 | Vendored grammar compared with a fresh upstream download | SHA-256 matched |
 
@@ -26,8 +28,10 @@ node IDs and SCIP index locations now resolve links consistently. The regression
 exercise a project and compiler index reached through a link, duplicate index spellings,
 forgetting an index by either spelling, and an index outside the project.
 
-These are local results. The updated code has not yet run on the actual Linux/macOS CI
-runners; the Windows junction run reproduces the path condition, not those operating systems.
+The [CI run for `40a0695`](https://github.com/MyKa322/Vertskim/actions/runs/43472522658)
+completed successfully: all nine jobs passed, including the three actual macOS runners
+and the Linux browser tests. The local Windows junction run is additional regression
+coverage; the cross-platform result is established by those CI jobs.
 
 ## Real project
 

@@ -28,6 +28,10 @@ of it done), **Open**, or **Your call** (waiting for a decision only you can mak
   directory behind a junction, and `npm run lint`. Browser validation is recorded in the
   [Luau validation notes](docs/luau-validation.md).
 
+CI additionally passed all nine Linux/Windows/macOS jobs with Node 22.16, 24 and 26 at
+`40a0695`, including all eight Chromium browser tests on Linux
+([run](https://github.com/MyKa322/Vertskim/actions/runs/43472522658)).
+
 ## Summary
 
 | ID  | Issue                                                                       | Severity | Status       |
@@ -46,7 +50,7 @@ of it done), **Open**, or **Your call** (waiting for a decision only you can mak
 | A12 | Command-line searches can use out-of-date vectors                           | Low      | Fixed        |
 | A13 | Vendored and generated code is indexed unless `.gitignore` excludes it      | Low      | Fixed        |
 | A14 | Language-specific gaps                                                      | Low      | Fixed        |
-| R1  | Run on one machine only                                                     | Medium   | Partly fixed |
+| R1  | Run on one machine only                                                     | Medium   | Fixed        |
 | R2  | Scale is measured only up to about 1,300 files                              | Medium   | Improved     |
 | R3  | A compiler index found in the project is trusted without asking             | Medium   | Fixed        |
 | R4  | Repository text reaches the assistant and the terminal unfiltered           | Medium   | Fixed        |
@@ -73,13 +77,6 @@ of it done), **Open**, or **Your call** (waiting for a decision only you can mak
 - **N3 and the rest of H3. npm publication.** The repository now has a home on GitHub. Before
   npm publication, fill in package metadata, include each package's copy of `LICENSE`, and
   check whether `vertskim` is free on npm.
-- **R1, what is left. Other operating systems.** The CI workflow
-  (`.github/workflows/ci.yml`: Ubuntu, Windows and macOS with Node 22.16, 24 and 26, plus the
-  browser tests on Linux) has run: at `3e0971e`, all six Linux/Windows jobs passed and the three
-  macOS jobs failed during tests. The logs show `/var` versus `/private/var` path mismatches.
-  Absolute node paths and SCIP index locations now resolve links consistently, with regression
-  tests and a full local run behind a temporary-directory junction. The updated code still
-  needs a CI rerun on the actual macOS runner; local Windows tests do not establish that result.
 - **N6, what is left.** `scip-python` 0.6.8 does not run on Windows (see below); it would need
   Linux, WSL or the CI. The `transformers` provider and embedding models other than
   `nomic-embed-text` have not been tried.
@@ -298,6 +295,11 @@ on Linux. Vertskim's reading of its output is covered only by a generated test i
   run on Node 22.13, which showed the missing full-text search (see above), and passes on 22.16,
   now the oldest supported version. The `node:sqlite` experimental-feature warning that Node 22
   prints is silenced, and nothing else is (tested).
+  The macOS failures at `3e0971e` came from comparing `/var` paths with canonical
+  `/private/var` paths. Absolute node IDs and SCIP index locations now resolve links
+  consistently. The 148-test suite passes on all nine OS/Node combinations in the
+  [CI run for `40a0695`](https://github.com/MyKa322/Vertskim/actions/runs/43472522658),
+  including the linked-project and compiler-index regression tests on the actual macOS runner.
 - **R2. Scale** (improved). All of `node_modules` here: 6,447 files and 65,505 nodes, first index
   in 29 s, 294 to 392 MB of memory, a 176 MB database, every query in 42 ms or less. Importing a
   compiler index now holds one file's text at a time. On `three.js`, a first index takes 8.0 s

@@ -51,11 +51,11 @@ what uses what, and answers the assistant's questions from that graph.
 | **Memory between sessions** | Notes the assistant leaves on a function or file come back whenever that code comes up again. |
 
 > [!NOTE]
-> **Status: 0.1.0, built and tested on Windows.** The local suite has 148 tests plus 8 browser
-> tests. CI has run on
-> Linux, Windows and macOS; the macOS path failures have fixes verified locally, pending a CI
-> rerun. The package is not on npm, so you run it from a checkout. [KNOWN_ISSUES.md](KNOWN_ISSUES.md) says
-> exactly what has been tried and what has not.
+> **Status: 0.1.0.** The 148-test suite passes in CI on Linux, Windows and macOS with Node
+> 22.16, 24 and 26, and all 8 Chromium browser tests pass on Linux. See the
+> [verified CI run](https://github.com/MyKa322/Vertskim/actions/runs/43472522658).
+> The package is not on npm, so you run it from a checkout. [KNOWN_ISSUES.md](KNOWN_ISSUES.md)
+> says exactly what has been tried and what has not.
 
 ## Quick start
 
